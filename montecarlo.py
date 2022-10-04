@@ -66,12 +66,12 @@ def get_deck_variants(deckrange):
 
 deep_leaf = None
 
-def print_tree(state, depth = 0):
+def print_tree(state:cards.Player, depth = 0):
     print ("  "*depth, state.short_str())
     for child in state.childstates:
         print_tree(child, depth+1)
 
-def get_all_leaf_nodes(state, depth=0):
+def get_all_leaf_nodes(state:cards.Player, depth=0) -> list(cards.Player):
     global deep_leaf
     if depth > 1000:
         deep_leaf = state
@@ -88,7 +88,7 @@ def get_all_leaf_nodes(state, depth=0):
             leaf_nodes.extend(get_all_leaf_nodes(child, depth+1))
         return leaf_nodes
 
-def find_fastest_win(state, maxturn = 10):
+def find_fastest_win(state:cards.Player, maxturn = 10):
     did_win = False
     win_state = None
     max_leaf_nodes = 0
@@ -117,6 +117,21 @@ def find_fastest_win(state, maxturn = 10):
         elif min_turn > maxturn:
             break
         
+        # For each leaf node in the min_turn_leaf_node list, deduplicate states that have the same string representation
+        original_leaf_nodes = {}
+        pruned_leaf_nodes = []
+        for leaf in min_turn_leaf_nodes:
+            string_rep = str(leaf)
+            if string_rep not in original_leaf_nodes:
+                original_leaf_nodes[str(leaf)] = leaf
+            else:
+                pruned_leaf_nodes.append(leaf)
+                leaf.ispruned = True
+        
+        print(f'Deduplicated {len(min_turn_leaf_nodes)} leaf nodes to {len(original_leaf_nodes)} leaf nodes')
+
+
+        # For each leaf node that is 
         # If we have more than leaf_node_limit leaf nodes, randomly select leaf_node_limit of them
         leaf_node_limit = 200000
         if len(min_turn_leaf_nodes) > leaf_node_limit:
