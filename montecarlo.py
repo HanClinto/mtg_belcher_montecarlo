@@ -207,7 +207,7 @@ def test_decklist(decklist, num_trials, max_turns):
     print (f' Tested decklist in {sum(durations)} ({sum(durations)/len(durations)} each)')
 
     # Return the average winning turn number
-    return total_turns / num_trials
+    return total_turns / num_trials, 
     
 def run_epoch(deckrange, num_trials, max_turns):
     deck_baseline, decks_61, cards_61, decks_59, cards_59 = get_deck_variants(deckrange)
