@@ -124,9 +124,6 @@ class Cards(list):
 
 
 class Player:
-    debug_player = None
-    debug_player = None
-
     def __init__(self, decklist, randseed=None):
         if randseed is None:
             randseed = time.time()
@@ -145,7 +142,8 @@ class Player:
         self.log:List[str] = [""]
         self.childstates:List['Player'] = []
         self.is_pruned:bool = False # Marks a player state as pruned, meaning that it should not be evaluated for exhaustive search anymore.
-    
+        self.pickledump = None
+
     def draw(self, quantity=1):
         self.log.append(f" Draw {quantity} card(s)")
         for i in range(quantity):
@@ -338,8 +336,11 @@ class Player:
         return copy
 
     def serialize(self):
+        if self.pickledump is None:
+            pickledump = pickle.dumps(self)
+            self.pickledump = pickledump
         # Serialize self by using pickle
-        return pickle.dumps(self)
+        return self.pickledump
     
     @staticmethod
     def deserialize(ser) -> 'Player':
