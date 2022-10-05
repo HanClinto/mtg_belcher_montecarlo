@@ -143,6 +143,7 @@ class Player:
         self.childstates:List['Player'] = []
         self.is_pruned:bool = False # Marks a player state as pruned, meaning that it should not be evaluated for exhaustive search anymore.
         self.pickledump = None
+        self.can_cast_wurm_now = False
 
     def draw(self, quantity=1):
         self.log.append(f" Draw {quantity} card(s)")
@@ -213,6 +214,15 @@ class Player:
                 self.mana_pool -= card.activation_cost(self)
                 card.activate(self)
 
+    def panglacial_potential(self, additional_cost):
+        # Check if we have a Panglacial Wurm in our deck, and have enough mana to cast it.
+        return (self.mana_pool >= PanglacialWurm._cost + additional_cost 
+            and self.deck.count("Panglacial Wurm") > 0)
+
+    def check_panglacial(self):
+        if self.panglacial_potential(0):
+            self.can_cast_wurm_now = True
+
     def has_spellmastery(self):
         # If there are two or more instant and sorcery cards in your graveyard, you have spellmastery
         return self.graveyard.count_cards('Instant') + self.graveyard.count_cards('Sorcery') >= 2
@@ -230,6 +240,7 @@ class Player:
         # Reset flags and counts
         self.creature_died_this_turn = False
         self.land_drops = 1
+        self.can_cast_wurm_now = False
         # Upkeep for permanents on table and cards in hand
         for card in self.table:
             card.do_upkeep(self)
@@ -258,6 +269,21 @@ class Player:
                 self.log.append("!!!You are a win!!!")
                 self.childstates = [self]
                 return self.childstates
+
+            # Check if we can cast a Panglacial Wurm
+            if self.can_cast_wurm_now:
+                # Make a copy of the current state
+                new_state = self.copy()
+                # Retrieve the wurm from within the deck
+                wurm = new_state.deck.find_and_remove("Panglacial Wurm", 1)
+                # Cast the wurm
+                new_state.play(wurm[0])
+                new_state.can_cast_wurm_now = False
+                # Add the new state to the list of child states
+                next_states.append(new_state)
+
+                # If we don't take advantage of it now, we've lost the opportunity for later.
+                self.can_cast_wurm_now = False
 
             # Land drops take priority, always do those first.
             # If we can drop a land, and we have 1 or more lands in hand, then play them.
@@ -379,13 +405,13 @@ class Player:
 
 # Define generic Card class that has a cost, name, and ability function
 class Card:
-    name = 'card'
-    _cost = 0
-    _alt_cost = MAXINT
-    _activation_cost = MAXINT
-    _is_permanent = False
-    cardtype = 'None'
-    prefer_alt = False
+    name:str = 'card'
+    _cost:int = 0
+    _alt_cost:int = MAXINT
+    _activation_cost:int = MAXINT
+    _is_permanent:bool = False
+    cardtype:str = 'None'
+    prefer_alt:bool = False
 
     def __str__(self):
         return self.name
@@ -460,10 +486,11 @@ class LayOfTheLand (Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.hand.extend(cards)
         super().play(controller)
 
@@ -480,10 +507,11 @@ class CaravanVigil (Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.hand.extend(cards)
         super().play(controller)
 
@@ -492,6 +520,7 @@ class CaravanVigil (Card):
 
     def alt_play(self, controller: Player) -> bool:
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         # Add the land to the battlefield
         controller.table.extend(cards)
         controller.lands += len(cards)
@@ -509,19 +538,17 @@ class SakuraTribeElder (Card):
     def __init__(self):
         self.power = 1
         self.toughness = 1
-        self.is_tapped = False
         pass
 
     def play(self, controller: Player):
-        self.is_tapped = False
         super().play(controller)
 
     def can_activate(self, controller: Player) -> bool:
-        return controller.deck.count_cards('Forest') > 0 and self in controller.table and not self.is_tapped
+        return self in controller.table and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._activation_cost))
 
     def activate(self, controller: Player):
-        self.is_tapped = True
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         # Add a tapped forest
         if len(cards) == 0:
             raise Exception("Steve found no lands")
@@ -547,6 +574,7 @@ class ArborealGrazer (Card):
         super().play(controller)
         # Put a land into play tapped
         cards = controller.hand.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.table.extend(cards)
         controller.lands += len(cards)
     
@@ -566,10 +594,11 @@ class ReclaimTheWastes (Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.hand.extend(cards)
         super().play(controller)
 
@@ -578,6 +607,7 @@ class ReclaimTheWastes (Card):
 
     def alt_play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 2)
+        controller.check_panglacial()
         controller.hand.extend(cards)
         super().alt_play(controller)
 
@@ -591,20 +621,22 @@ class LandGrant(Card):
     prefer_alt = True
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.hand.extend(cards)
         super().play(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
         return (super().can_alt_play(controller) 
-            and controller.deck.count_cards('Forest') > 0
+            and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._alt_cost))
             and controller.hand.count_cards('Forest') == 0)
 
     def alt_play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.hand.extend(cards)
         super().alt_play(controller)
 
@@ -620,6 +652,12 @@ class GoblinCharbelcher(Card):
 
     def do_upkeep(self, controller: Player):
         self.is_tapped = False
+
+    # NOTE: Should we allow the user to activate with forests still remaining in the deck?  It feels very shuffle-dependent, and I would like to optimize for the case where we can belcher the opponent out of the game guaranteed.
+    def can_activate(self, controller: Player) -> bool:
+        return (super().can_activate(controller) 
+            and not self.is_tapped 
+            and controller.deck.count_cards('Forest') == 0)
 
     def activate(self, controller: Player):
         self.is_tapped = True
@@ -659,7 +697,7 @@ class RampantGrowth(Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -679,7 +717,7 @@ class NissasPilgrimage(Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         search_count = 2
@@ -833,7 +871,7 @@ class SearchForTomorrow(Card):
         self.time_counters = 0
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -842,7 +880,7 @@ class SearchForTomorrow(Card):
         super().play(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
-        return super().can_alt_play(controller) and controller.deck.count_cards('Forest') > 0
+        return super().can_alt_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(0))
 
     def alt_play(self, controller: Player):
         self.time_counters = 2
@@ -930,3 +968,30 @@ class AncientStirrings(Card):
     def alt_play(self, controller: Player) -> bool:
         self.do_stirrings(controller, 'Land')
         super().alt_play(controller)
+
+# Panglacial Wurm is a creature that costs 7 and says: Trample. While you're searching your library, you may cast Panglacial Wurm from your library.
+class PanglacialWurm(Card):
+    name = 'Panglacial Wurm'
+    _cost = 7
+    cardtype = 'Creature'
+
+    def __init__(self):
+        self.is_tapped:bool = False
+
+    def play(self, controller: Player):
+        self.is_tapped = True # Start off tapped to simulate summoning sickness
+        super().play(controller)
+
+    def do_upkeep(self, controller: Player):
+        self.is_tapped = False
+
+    def can_activate(self, controller: Player) -> bool:
+        return (not self.is_tapped) and (self in controller.table)
+
+    def activate(self, controller: Player):
+        self.is_tapped = True
+        controller.opponent_lifetotal -= 9
+        if controller.opponent_lifetotal <= 0:
+            controller.log.append(f'  Panglacial Wurm attacked for 9 and won the game')
+        else:
+            controller.log.append(f'  Panglacial Wurm attacked for 9')
