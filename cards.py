@@ -478,17 +478,11 @@ class Card:
     def can_play(self, controller: Player) -> bool:
         return self.cost <= controller.mana_pool
 
-    def alt_cost(self, controller: Player) -> int:
-        return self.alt_cost
-
     def alt_play(self, controller: Player):
         self.resolve(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
         return self.alt_cost <= controller.mana_pool
-
-    def activation_cost(self, controller: Player) -> int:
-        return self.activation_cost
 
     def activate(self, controller: Player):
         pass
