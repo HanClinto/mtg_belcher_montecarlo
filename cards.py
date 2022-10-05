@@ -1010,6 +1010,7 @@ class AbundantHarvest(Card):
         # Put the rest on the bottom of your library in a random order
         controller.deck.put_on_bottom(cards)
 
+    # Play is for when you want to target a land
     def can_play(self, controller: Player) -> bool:
         return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
 
@@ -1018,6 +1019,7 @@ class AbundantHarvest(Card):
         self.do_harvest(controller, True)
         super().play(controller)
 
+    # Alt play is for when you want to target a nonland
     def alt_play(self, controller: Player) -> bool:
         # Nonland
         self.do_harvest(controller, False)
