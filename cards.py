@@ -139,28 +139,29 @@ class Cards(list):
 
 
 class Player:
+    land_drops:int = 0
+    lands:int = 0
+    mana_pool:int = 0
+    current_turn:int = 0
+    creature_died_this_turn:bool = False
+    opponent_lifetotal:int = 20
+    is_pruned:bool = False # Marks a player state as pruned, meaning that it should not be evaluated for exhaustive search anymore.
+    pickledump = None
+    can_cast_wurm_now:bool = False
+
     def __init__(self, decklist, randseed=None):
         if randseed is None:
             randseed = time.time()
         self.randseed = randseed
-        self.deck:Cards[Card] = Cards(decklist, randseed)
-        self.hand:Cards[Card] = Cards()
-        self.graveyard:Cards[Card] = Cards()
-        self.table:Cards[Card] = Cards()
-        self.exile:Cards[Card] = Cards()
-        self.land_drops:int = 0
-        self.lands:int = 0
-        self.mana_pool:int = 0
-        self.current_turn:int = 0
-        self.creature_died_this_turn:bool = False
-        self.opponent_lifetotal:int = 20
+        self.deck:Cards = Cards(decklist, randseed)
+        self.hand:Cards = Cards()
+        self.graveyard:Cards = Cards()
+        self.table:Cards = Cards()
+        self.exile:Cards = Cards()
         self.log:List[str] = [""]
         self.childstates:List['Player'] = []
-        self.is_pruned:bool = False # Marks a player state as pruned, meaning that it should not be evaluated for exhaustive search anymore.
-        self.pickledump = None
         # If we don't have any Panglacial Wurms in the deck, we can shortcut some costly checks.
-        self.panglacial_in_deck = self.deck.count_cards('Panglacial Wurm') > 0
-        self.can_cast_wurm_now = False
+        self.panglacial_in_deck:bool = self.deck.count_cards('Panglacial Wurm') > 0
 
     def draw(self, quantity=1):
         self.log.append(f" Draw {quantity} card(s)")
@@ -182,6 +183,7 @@ class Player:
         if card in self.hand:
             if not card.can_play(self):
                 print(f' ERROR: Cannot play {card}')
+                raise Exception(f' ERROR: Cannot play {card}')
             else:
                 self.log.append(f" Play: {card}")
                 self.hand.remove(card)
@@ -203,6 +205,7 @@ class Player:
         if card in self.hand:
             if not card.can_alt_play(self):
                 print(f' ERROR: Cannot alt play {card}')
+                raise Exception(f' ERROR: Cannot alt play {card}')
             else:
                 self.log.append(f" Alt play: {card}")
                 self.hand.remove(card)
@@ -210,12 +213,13 @@ class Player:
                 card.alt_play(self)
 
     def can_activate(self, card) -> bool:
-        card = self.table.get_card(card)
-        if card is None:
-            return False
+        if isinstance(card, Card):
+            return card in self.table and card.can_activate(self)
+        else:
+            for tablecard in self.table:
+                if tablecard.name == card and tablecard.can_activate(self):
+                    return True
 
-        if card in self.table:
-            return card.can_activate(self)
         return False
 
     def activate(self, card):
@@ -223,7 +227,9 @@ class Player:
 
         if card in self.table:
             if not card.can_activate(self):
+                # Throw exception
                 print(f' ERROR: Cannot activate {card}')
+                raise Exception(f' ERROR: Cannot activate {card}')
             else:
                 self.log.append(f" Activate: {card}")
                 self.mana_pool -= card.activation_cost
@@ -237,7 +243,8 @@ class Player:
             and self.deck.count("Panglacial Wurm") > 0)
 
     def check_panglacial(self):
-        self.can_cast_wurm_now = self.panglacial_potential(0)
+        if self.panglacial_potential(0):
+            self.can_cast_wurm_now = True
 
     def has_spellmastery(self):
         # If there are two or more instant and sorcery cards in your graveyard, you have spellmastery
@@ -330,9 +337,15 @@ class Player:
             # Check to see if we can attack with a creature
              # Can we attack with Chancellor?
             elif self.can_activate('Chancellor of the Tangle'):
+                # Find the first copy of Chancellor in our new table that can be activated.
                 copy = self.copy()
-                copy.activate('Chancellor of the Tangle')
-                next_states.append(copy)
+                for copy_card in copy.table:
+                    if copy_card.name == 'Chancellor of the Tangle' and copy_card.can_activate(copy):
+                        copy.activate(copy_card)
+                        next_states.append(copy)
+                        break
+                if not copy in next_states:
+                    raise Exception("ERROR: Chancellor of the Tangle should be able to attack, but can't.")
              # Can we attack with Panglacial Wurm?
             elif self.panglacial_in_deck and self.can_activate('Panglacial Wurm'):
                 copy = self.copy()
@@ -347,13 +360,13 @@ class Player:
             #    next_states.append(copy)
             else:
                 # Get a list of every unique card name in the hand
-                unique_hand_cards = {}
+                unique_hand_cards = []
                 for card in self.hand:
-                    if card.name not in unique_hand_cards:
-                        unique_hand_cards[card.name] = card
+                    if card not in unique_hand_cards:
+                        unique_hand_cards.append(card)
 
-                # For every card name, if we can play that card, then play it.  Don't branch more than once for each card name.
-                for card in unique_hand_cards.values():
+                # For every unique card, if we can play that card, then play it.  Don't branch more than once for each card name.
+                for card in unique_hand_cards:
                     can_altplay = self.can_alt_play(card)
 
                     # Only play it for regular if the card doesn't prefer to be alt played
@@ -366,16 +379,14 @@ class Player:
                         copy.alt_play(card.name)
                         next_states.append(copy)
 
-                unique_table_cards = {}
-                for card in self.table:
-                    if card.name not in unique_table_cards:
-                        unique_table_cards[card.name] = card
+                # However, for cards already on the field, we can activate multiples of the same card
 
                 # Attempt to activate every card on the table
-                for card in unique_table_cards.values():
+                for card_idx, card in enumerate(self.table):
                     if self.can_activate(card):
                         copy = self.copy()
-                        copy.activate(card.name)
+                        copy_card = copy.table[card_idx]
+                        copy.activate(copy_card)
                         next_states.append(copy)
 
                 # Always consider the option of just passing the turn.
@@ -383,9 +394,9 @@ class Player:
                 # TODO: Evaluate the baseline to see if this measurably increases win rate or not.
                 # Just because we CAN do something on our turn, is there ever any benefit to NOT doing it on our turn?
                 # Or should we attempt to always use every resource available to us?
-                copy = self.copy()
-                copy.start_turn()
-                next_states.append(copy)
+                #copy = self.copy()
+                #copy.start_turn()
+                #next_states.append(copy)
 
             self.childstates = next_states
 
