@@ -92,6 +92,21 @@ class Cards(list):
                 break
         return revealed_cards, revealed_card
 
+    def reveal_cards_until_not(self, name):
+        # Reveal cards until something OTHER than the given card is found.
+        # Return the list of revealed cards.
+        revealed_cards = []
+        revealed_card = None
+        while True:
+            if len(self) == 0:
+                break
+            card = self.draw()
+            revealed_cards.append(card)
+            if not card.name == name:
+                revealed_card = card
+                break
+        return revealed_cards, revealed_card
+
     def count_cards(self, name, in_top=0) -> int:
         count = 0
         peek_cnt = 0
@@ -969,6 +984,43 @@ class AncientStirrings(Card):
 
     def alt_play(self, controller: Player) -> bool:
         self.do_stirrings(controller, 'Land')
+        super().alt_play(controller)
+
+# Abundant Harvest is a sorcery that costs 1 that says: Choose land or nonland. Reveal cards from the top of your library until you reveal a card of the chosen kind. Put that card into your hand and the rest on the bottom of your library in a random order.
+class AbundantHarvest(Card):
+    name = 'Abundant Harvest'
+    _cost = 1
+    _alt_cost = 1
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def do_harvest(self, controller: Player, target_land: bool):
+        # Reveal cards from the top of your library until you reveal a card of the chosen kind
+        if target_land:
+            cards, found_card = controller.deck.reveal_cards_until('Forest')
+        else:
+            cards, found_card = controller.deck.reveal_cards_until_not('Forest')
+        
+        # Put that card into your hand
+        if found_card is not None:
+            controller.hand.append(found_card)
+            cards.remove(found_card)
+        # Put the rest on the bottom of your library in a random order
+        controller.deck.put_on_bottom(cards)
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
+
+    def play(self, controller: Player):
+        # Land
+        self.do_harvest(controller, True)
+        super().play(controller)
+
+    def alt_play(self, controller: Player) -> bool:
+        # Nonland
+        self.do_harvest(controller, False)
         super().alt_play(controller)
 
 # Panglacial Wurm is a creature that costs 7 and says: Trample. While you're searching your library, you may cast Panglacial Wurm from your library.
