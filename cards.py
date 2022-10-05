@@ -353,7 +353,7 @@ class Player:
                         unique_hand_cards[card.name] = card
 
                 # For every card name, if we can play that card, then play it.  Don't branch more than once for each card name.
-                for card in unique_hand_cards.values:
+                for card in unique_hand_cards.values():
                     can_altplay = self.can_alt_play(card)
 
                     # Only play it for regular if the card doesn't prefer to be alt played
@@ -372,7 +372,7 @@ class Player:
                         unique_table_cards[card.name] = card
 
                 # Attempt to activate every card on the table
-                for card in unique_table_cards.values:
+                for card in unique_table_cards.values():
                     if self.can_activate(card):
                         copy = self.copy()
                         copy.activate(card.name)
