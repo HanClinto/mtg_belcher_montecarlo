@@ -448,6 +448,13 @@ class Player:
         # Current turn, number of lands left in our deck, number of cards in hand, mana in our pool, lands on the field, opponent's life total, and the last log entry
         return f"{self.current_turn})  LID: {self.deck.count_cards('Forest')}  H: {len(self.hand)}  Mana: {self.mana_pool}/{self.lands} [{self.hand.count_cards('Forest')}]  OLife: {self.opponent_lifetotal} '{self.log[-1]}'"
 
+    # Methods to support testing
+    def debug_force_get_card_in_hand(self, card_name) -> 'Card':
+        # Ensure that the player has the given card in their hand. If they don't, then retrieve on from the deck.
+        if not self.hand.count_cards(card_name) > 0:
+            card = self.deck.find_and_remove(card_name)[0]
+            self.hand.append(card)
+        return self.hand.find(card_name)[0]
 
 # Define generic Card class that has a cost, name, and ability function
 class Card:
@@ -727,8 +734,19 @@ class ElvishMystic (Card):
 
 
 # Llanowar Elves is a copy of Elvish Mystic with a different name
-class LlanowarElves (ElvishMystic):
+class LlanowarElves (Card):
     name = 'Llanowar Elves'
+    cost:int = 1
+    cardtype = 'Creature'
+
+    def __init__(self):
+        self.is_tapped = True
+        pass
+
+    def play(self, controller: Player):
+        # Instead of activating to add mana to our mana pool, just treat it as a new land so we don't have as many branching permutations.
+        controller.lands += 1
+        super().play(controller)
 
 # Rampant Growth is a card with an ability: Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.
 class RampantGrowth(Card):
@@ -923,6 +941,7 @@ class SearchForTomorrow(Card):
         cards = controller.deck.find_and_remove('Forest', 1)
         controller.table.extend(cards)
         controller.lands += 1
+        controller.mana_pool += 1 # The land comes into play untapped, so immediately add it to the mana pool.
         super().play(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
