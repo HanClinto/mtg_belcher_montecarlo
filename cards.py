@@ -41,7 +41,7 @@ class Cards(list):
         if not self.randseed is None:
             random.seed(self.randseed)
         random.shuffle(self)
-    
+
     def draw(self, quant=1):
         if quant == 1:
             return self.pop()
@@ -125,7 +125,7 @@ class Cards(list):
                 self.put_on_bottom(c)
         else:
             self.insert(0, card)
-    
+
     def get_card(self, card) -> 'Card':
         if isinstance(card, int):
             return self[card]
@@ -143,11 +143,11 @@ class Player:
         if randseed is None:
             randseed = time.time()
         self.randseed = randseed
-        self.deck:Cards = Cards(decklist, randseed)
-        self.hand:Cards = Cards()
-        self.graveyard:Cards = Cards()
-        self.table:Cards = Cards()
-        self.exile:Cards = Cards()
+        self.deck:Cards[Card] = Cards(decklist, randseed)
+        self.hand:Cards[Card] = Cards()
+        self.graveyard:Cards[Card] = Cards()
+        self.table:Cards[Card] = Cards()
+        self.exile:Cards[Card] = Cards()
         self.land_drops:int = 0
         self.lands:int = 0
         self.mana_pool:int = 0
@@ -158,6 +158,8 @@ class Player:
         self.childstates:List['Player'] = []
         self.is_pruned:bool = False # Marks a player state as pruned, meaning that it should not be evaluated for exhaustive search anymore.
         self.pickledump = None
+        # If we don't have any Panglacial Wurms in the deck, we can shortcut some costly checks.
+        self.panglacial_in_deck = self.deck.count_cards('Panglacial Wurm') > 0
         self.can_cast_wurm_now = False
 
     def draw(self, quantity=1):
@@ -182,9 +184,8 @@ class Player:
                 print(f' ERROR: Cannot play {card}')
             else:
                 self.log.append(f" Play: {card}")
-                cost = card.cost(self)
                 self.hand.remove(card)
-                self.mana_pool -= cost
+                self.mana_pool -= card.cost
                 card.play(self)
 
     def can_alt_play(self, card) -> bool:
@@ -204,9 +205,8 @@ class Player:
                 print(f' ERROR: Cannot alt play {card}')
             else:
                 self.log.append(f" Alt play: {card}")
-                cost = card.alt_cost(self)
                 self.hand.remove(card)
-                self.mana_pool -= cost
+                self.mana_pool -= card.alt_cost
                 card.alt_play(self)
 
     def can_activate(self, card) -> bool:
@@ -226,17 +226,18 @@ class Player:
                 print(f' ERROR: Cannot activate {card}')
             else:
                 self.log.append(f" Activate: {card}")
-                self.mana_pool -= card.activation_cost(self)
+                self.mana_pool -= card.activation_cost
                 card.activate(self)
 
-    def panglacial_potential(self, additional_cost):
+    def panglacial_potential(self, additional_cost) -> bool:
+        if not self.panglacial_in_deck:
+            return False
         # Check if we have a Panglacial Wurm in our deck, and have enough mana to cast it.
-        return (self.mana_pool >= PanglacialWurm._cost + additional_cost 
+        return (self.mana_pool >= PanglacialWurm.cost + additional_cost
             and self.deck.count("Panglacial Wurm") > 0)
 
     def check_panglacial(self):
-        if self.panglacial_potential(0):
-            self.can_cast_wurm_now = True
+        self.can_cast_wurm_now = self.panglacial_potential(0)
 
     def has_spellmastery(self):
         # If there are two or more instant and sorcery cards in your graveyard, you have spellmastery
@@ -270,7 +271,7 @@ class Player:
 
     def check_win(self) -> bool:
         return self.opponent_lifetotal <= 0
-        
+
     def step_next_actions(self) -> List['Player']:
         if self.is_pruned:
             return []
@@ -286,6 +287,10 @@ class Player:
                 return self.childstates
 
             # Check if we can cast a Panglacial Wurm
+            #  Note that we're technically checking this after the resolution of whatever spell
+            #   did the searching, but because the check that set this flag looked at the amount
+            #   of mana that was available at the time of the search, we can cast the Panglacial
+            #   Wurm now without any loss of gameplay integrity.
             if self.can_cast_wurm_now:
                 # Make a copy of the current state
                 new_state = self.copy()
@@ -302,6 +307,12 @@ class Player:
                 # If we don't take advantage of it now, we've lost the opportunity for later.
                 self.can_cast_wurm_now = False
 
+            # No-brainer decisions:
+            #  * If we have a land in our hand, play it
+            #  * If we can cast Land Grant for free, then do so
+            #  * If we can attack with a creature, then do so
+            #  Otherwise, loop through all other cards in hand and activations (if any) and evaluate them.
+
             # Land drops take priority, always do those first.
             # If we can drop a land, and we have 1 or more lands in hand, then play them.
             if self.land_drops > 0 and self.hand.count_cards('Forest') > 0:
@@ -309,7 +320,7 @@ class Player:
                 copy_lands = copy.hand.find('Forest', copy.land_drops)
                 for copy_land in copy_lands:
                     copy.play(copy_land)
-                
+
                 next_states.append(copy)
             # Otherwise, if we can play Land Grant for its alternate cost, do that.
             elif self.can_alt_play('Land Grant'):
@@ -317,48 +328,64 @@ class Player:
                 copy.alt_play('Land Grant')
                 next_states.append(copy)
             # Check to see if we can attack with a creature
+             # Can we attack with Chancellor?
             elif self.can_activate('Chancellor of the Tangle'):
                 copy = self.copy()
                 copy.activate('Chancellor of the Tangle')
                 next_states.append(copy)
-            elif self.can_activate('Sakura-Tribe Elder'):
+             # Can we attack with Panglacial Wurm?
+            elif self.panglacial_in_deck and self.can_activate('Panglacial Wurm'):
                 copy = self.copy()
-                copy.activate('Sakura-Tribe Elder')
+                copy.activate('Panglacial Wurm')
                 next_states.append(copy)
+            # NOTE: If one wants to make saccing Steve a no-brainer, then uncomment the following lines.
+            # Leaving this commented will increase branching permutations, but may be worth it
+            #  for selectively saving the activation for things like Caravan Vigil or Panglacial Wurm.
+            #elif self.can_activate('Sakura-Tribe Elder'):
+            #    copy = self.copy()
+            #    copy.activate('Sakura-Tribe Elder')
+            #    next_states.append(copy)
             else:
-                # Get a list of every card name in the hand
-                card_names = []
+                # Get a list of every unique card name in the hand
+                unique_hand_cards = {}
                 for card in self.hand:
-                    if card.name not in card_names:
-                        card_names.append(card.name)
-                
+                    if card.name not in unique_hand_cards:
+                        unique_hand_cards[card.name] = card
+
                 # For every card name, if we can play that card, then play it.  Don't branch more than once for each card name.
-                for card_name in card_names:
-                    card = self.hand.get_card(card_name)
+                for card in unique_hand_cards.values:
                     can_altplay = self.can_alt_play(card)
 
                     # Only play it for regular if the card doesn't prefer to be alt played
                     if self.can_play(card) and not (can_altplay and card.prefer_alt):
                         copy = self.copy()
-                        copy.play(card_name)
+                        copy.play(card.name)
                         next_states.append(copy)
                     if can_altplay:
                         copy = self.copy()
-                        copy.alt_play(card_name)
+                        copy.alt_play(card.name)
                         next_states.append(copy)
 
-                card_names = []
+                unique_table_cards = {}
                 for card in self.table:
-                    if card.name not in card_names:
-                        card_names.append(card.name)
+                    if card.name not in unique_table_cards:
+                        unique_table_cards[card.name] = card
 
                 # Attempt to activate every card on the table
-                for card_name in card_names:
-                    card = self.table.get_card(card_name)
+                for card in unique_table_cards.values:
                     if self.can_activate(card):
                         copy = self.copy()
-                        copy.activate(card_name)
+                        copy.activate(card.name)
                         next_states.append(copy)
+
+                # Always consider the option of just passing the turn.
+                # Note that this will increase branching permutations and may be of questionable value.
+                # TODO: Evaluate the baseline to see if this measurably increases win rate or not.
+                # Just because we CAN do something on our turn, is there ever any benefit to NOT doing it on our turn?
+                # Or should we attempt to always use every resource available to us?
+                copy = self.copy()
+                copy.start_turn()
+                next_states.append(copy)
 
             self.childstates = next_states
 
@@ -367,9 +394,9 @@ class Player:
             copy = self.copy()
             copy.start_turn()
             self.childstates.append(copy)
-        
+
         return self.childstates
-        
+
 
     def copy(self) -> 'Player':
         # Serialize self into a string
@@ -379,12 +406,14 @@ class Player:
         return copy
 
     def serialize(self):
+        # Cache the pickle dump so that we don't do this any more frequently than we have to.
         if self.pickledump is None:
+            # Serialize self by using pickle
             pickledump = pickle.dumps(self)
+            # Cache the result for later in case we need to make multiple copies (quite likely)
             self.pickledump = pickledump
-        # Serialize self by using pickle
         return self.pickledump
-    
+
     @staticmethod
     def deserialize(ser) -> 'Player':
         # Deserialize the pickle into a new Player object
@@ -423,21 +452,17 @@ class Player:
 # Define generic Card class that has a cost, name, and ability function
 class Card:
     name:str = 'card'
-    _cost:int = 0
-    _alt_cost:int = MAXINT
-    _activation_cost:int = MAXINT
-    _is_permanent:bool = False
+    cost:int = 0
+    alt_cost:int = MAXINT
+    activation_cost:int = MAXINT
     cardtype:str = 'None'
-    prefer_alt:bool = False
+    prefer_alt:bool = False # If the alternate cost is available, don't evaluate the regular cost.  This is useful for cards like Caravan Vigil and Land Grant.
 
     def __str__(self):
         return self.name
 
     def long_str(self, controller: Player):
-        return self.name + f" [{self.cost(controller)}]   Can play: {self.can_play(controller)} / {self.can_alt_play(controller)}   Can activate: {self.can_activate(controller)}"
-
-    def cost(self, controller: Player) -> int:
-        return self._cost
+        return self.name + f" [{self.cost}]   Can play: {self.can_play(controller)} / {self.can_alt_play(controller)}   Can activate: {self.can_activate(controller)}"
 
     def play(self, controller: Player):
         self.resolve(controller)
@@ -451,25 +476,25 @@ class Card:
             controller.graveyard.append(self)
 
     def can_play(self, controller: Player) -> bool:
-        return self.cost(controller) <= controller.mana_pool
+        return self.cost <= controller.mana_pool
 
     def alt_cost(self, controller: Player) -> int:
-        return self._alt_cost
+        return self.alt_cost
 
     def alt_play(self, controller: Player):
         self.resolve(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
-        return self.alt_cost(controller) <= controller.mana_pool
+        return self.alt_cost <= controller.mana_pool
 
     def activation_cost(self, controller: Player) -> int:
-        return self._activation_cost
+        return self.activation_cost
 
     def activate(self, controller: Player):
         pass
 
     def can_activate(self, controller: Player) -> bool:
-        return self.activation_cost(controller) <= controller.mana_pool
+        return self.activation_cost <= controller.mana_pool
 
     def is_permanent(self) -> bool:
         return not (self.cardtype == 'Instant' or self.cardtype == 'Sorcery')
@@ -478,9 +503,16 @@ class Card:
         pass
 
 # Forest is a card that costs 0 and has an ability that increases a player's land count by 1
+# ASSUMPTION: We always tap every land for mana immediately.
+#  Adding a land to the battlefield untapped is to increase the controller's land count
+#   (how much mana is available after untap) and also increases the amount available in a
+#   player's mana pool.
+#  Note that this causes some tricky assumptions when it comes to Wild Growth (which only
+#   immediately adds a mana if there was an untapped forest when it was played), but we are
+#   able to work around it alright I think.
 class Forest (Card):
     name = 'Forest'
-    _cost = 0
+    cost:int = 0
     cardtype = 'Land'
 
     def can_play(self, controller: Player) -> bool:
@@ -495,7 +527,7 @@ class Forest (Card):
 # Lay of the Land is a card that costs 1 and has an ability that searches the deck for a land and puts it into the player's hand
 class LayOfTheLand (Card):
     name = 'Lay of the Land'
-    _cost = 1
+    cost:int = 1
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -503,7 +535,7 @@ class LayOfTheLand (Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -512,10 +544,11 @@ class LayOfTheLand (Card):
         super().play(controller)
 
 # Caravan Vigil is a card that costs 1 and has an ability that says: Search your library for a basic land card, reveal it, put it into your hand, then shuffle your library. You may put that card onto the battlefield instead of putting it into your hand if a creature died this turn.
+# NOTE: The morbid mode of the card is done as an alternate play, so that we can more easily track its effect on the game.
 class CaravanVigil (Card):
     name = 'Caravan Vigil'
-    _cost = 1
-    _alt_cost = 1
+    cost:int = 1
+    alt_cost:int = 1
     cardtype = 'Sorcery'
     prefer_alt = True
 
@@ -524,7 +557,7 @@ class CaravanVigil (Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -548,32 +581,24 @@ class CaravanVigil (Card):
 # Sakura-Tribe Elder is a creature that costs 2 and has an ability that says: Sacrifice Sakura-Tribe Elder: Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.
 class SakuraTribeElder (Card):
     name = 'Sakura-Tribe Elder'
-    _cost = 2
+    cost:int = 2
     cardtype = 'Creature'
-    _activation_cost = 0
-
-    def __init__(self):
-        self.power = 1
-        self.toughness = 1
-        pass
-
-    def play(self, controller: Player):
-        super().play(controller)
+    activation_cost:int = 0
 
     def can_activate(self, controller: Player) -> bool:
-        return self in controller.table and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._activation_cost))
+        return (self in controller.table
+            and (
+                controller.deck.count_cards('Forest') > 0
+                or controller.panglacial_potential(self.activation_cost))
+            )
 
     def activate(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
         controller.check_panglacial()
         # Add a tapped forest
-        if len(cards) == 0:
-            raise Exception("Steve found no lands")
         controller.table.extend(cards)
         controller.lands += len(cards)
         # Destroy self
-
-        # Remove self from the table
         if not self in controller.table:
             raise Exception("Sakura-Tribe Elder is not on the battlefield")
         controller.table.remove(self)
@@ -584,7 +609,7 @@ class SakuraTribeElder (Card):
 # Arboreal Grazer is a creature that costs 1 that says "When Arboreal Grazer enters the battlefield, you may put a land card from your hand onto the battlefield tapped."
 class ArborealGrazer (Card):
     name = 'Arboreal Grazer'
-    _cost = 1
+    cost:int = 1
     cardtype = 'Creature'
 
     def play(self, controller: Player):
@@ -594,7 +619,7 @@ class ArborealGrazer (Card):
         controller.check_panglacial()
         controller.table.extend(cards)
         controller.lands += len(cards)
-    
+
     # Only let us play this card if we have at least 1 Forest in hand.
     def can_play(self, controller: Player) -> bool:
         return super().can_play(controller) and controller.hand.count_cards('Forest') > 0
@@ -603,15 +628,15 @@ class ArborealGrazer (Card):
 #  It has an alternate cost of 4 that searches for 2 lands instead.
 class ReclaimTheWastes (Card):
     name = 'Reclaim the Wastes'
-    _cost = 1
-    _altcost = 4
+    cost:int = 1
+    alt_cost:int = 4
     cardtype = 'Sorcery'
 
     def __init__(self):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -629,16 +654,17 @@ class ReclaimTheWastes (Card):
         super().alt_play(controller)
 
 # Land Grant is a card that costs 2 and has an ability that searches the deck for a land and puts it into the player's hand
-    # However, if the player has no lands in hand, it costs 0
+# However, if the player has no lands in hand, it costs 0.
+# Each mode is implemented as a separate cost.
 class LandGrant(Card):
     name = 'Land Grant'
-    _cost = 2
-    _alt_cost = 0
+    cost:int = 2
+    alt_cost:int = 0
     cardtype = 'Sorcery'
     prefer_alt = True
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -647,8 +673,8 @@ class LandGrant(Card):
         super().play(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
-        return (super().can_alt_play(controller) 
-            and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._alt_cost))
+        return (super().can_alt_play(controller)
+            and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.alt_cost))
             and controller.hand.count_cards('Forest') == 0)
 
     def alt_play(self, controller: Player):
@@ -658,10 +684,14 @@ class LandGrant(Card):
         super().alt_play(controller)
 
 # Goblin Charbelcher is a card that costs 4. It has an Activation ability that costs 3, and when activated, removes cards from the top of the library until a land is reached.  It reduces the enemy life total by the number of cards revealed this way and puts them all onto the bottom of the library.
+# NOTE: If we permit the game to activate Belcher prior to removing all lands from the deck, it will be possible to win much faster. HOWEVER, this is also "cheating" in that the game knows the contents of the deck and can therefore make a decision that the player cannot.
+#  Therefore, we will (artificially) limit the game to optimize for the case where Belcher is activated after all lands have been removed from the deck.
+# NOTE: This is in contrast to the decisions we have made in other places, such as Ancient Stirrings, that will only let us cast it if we have a "hit" in the top 5 cards of the deck. The alternative is to not implement Ancient Stirrings at all, but that's not great.
+#  For now, just understand that the value of Belcher is artificially deflated (due to not being able to risk premature belching), and the value of Ancient Stirrings is artificially inflated (due to not being able to risk not finding a hit).
 class GoblinCharbelcher(Card):
     name = 'Goblin Charbelcher'
-    _cost = 4
-    _activation_cost = 3
+    cost:int = 4
+    activation_cost:int = 3
     cardtype = 'Artifact'
 
     def __init__(self):
@@ -672,8 +702,8 @@ class GoblinCharbelcher(Card):
 
     # NOTE: Should we allow the user to activate with forests still remaining in the deck?  It feels very shuffle-dependent, and I would like to optimize for the case where we can belcher the opponent out of the game guaranteed.
     def can_activate(self, controller: Player) -> bool:
-        return (super().can_activate(controller) 
-            and not self.is_tapped 
+        return (super().can_activate(controller)
+            and not self.is_tapped
             and controller.deck.count_cards('Forest') == 0)
 
     def activate(self, controller: Player):
@@ -685,9 +715,11 @@ class GoblinCharbelcher(Card):
         controller.log.append(f'  Belcher with {lands_in_deck} lands in deck')
 
 # Elvish Mystic is a card that costs 1 and has an ability that increases a player's mana pool by 1
+#  NOTE: This is a bit of a hack, but when we play it we simply increase the player's land count by 1,
+#   which means that the player will have extra mana in their mana pool starting *next* turn.
 class ElvishMystic (Card):
     name = 'Elvish Mystic'
-    _cost = 1
+    cost:int = 1
     cardtype = 'Creature'
 
     def __init__(self):
@@ -707,17 +739,20 @@ class LlanowarElves (ElvishMystic):
 # Rampant Growth is a card with an ability: Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.
 class RampantGrowth(Card):
     name = 'Rampant Growth'
-    _cost = 2
+    cost:int = 2
     cardtype = 'Sorcery'
 
-    def __init__(self):
-        pass
-
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        # Don't play unless we have a land in the deck, or we have a potential to cast Panglacial Wurm
+        return (super().can_play(controller)
+            and (
+                controller.deck.count_cards('Forest') > 0
+                or controller.panglacial_potential(self.cost))
+            )
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         # Add a tapped forest
         controller.lands += len(cards)
         controller.table.extend(cards)
@@ -726,15 +761,15 @@ class RampantGrowth(Card):
 # Nissa's Pilgrimage is a card with the ability: Search your library for up to two basic Forest cards, reveal those cards, and put one onto the battlefield tapped and the rest into your hand. Then shuffle your library.  If there are two or more instant and/or sorcery cards in your graveyard, search your library for up to three basic Forest cards instead of two.
 class NissasPilgrimage(Card):
     name = 'Nissa\'s Pilgrimage'
-    _cost = 3
-    _alt_cost = 3
+    cost:int = 3
+    alt_cost:int = 3
     prefer_alt = True
 
     def __init__(self):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         search_count = 2
@@ -768,12 +803,14 @@ class NissasPilgrimage(Card):
         super().alt_play(controller)
 
 # Wall of Roots is a card that costs 2 and has an ability that increases a player's mana pool by 1
+# NOTE: This is a bit of a hack.  For now we're going to treat this as a land enters untapped, but doesn't remove a Forest from the deck.
+#  so we don't have to deal with the branching permutations of activating it.
+# If the AI starts to over-value Wall of Roots, consider restoring the prior implementation (saved for reference)
 class WallOfRoots (Card):
     name = 'Wall of Roots'
-    _cost = 2
+    cost:int = 2
     cardtype = 'Creature'
 
-    # NOTE: This is a bit of a hack.  We're going to treat this as a land so we don't have to deal with the branching permutations of activating it.
     def play(self, controller: Player):
         controller.lands += 1
         controller.mana_pool += 1
@@ -782,9 +819,9 @@ class WallOfRoots (Card):
 """
 class WallOfRoots (Card):
     name = 'Wall of Roots'
-    _cost = 2
+    cost:int = 2
     cardtype = 'Creature'
-    _activation_cost = 0
+    activation_cost:int = 0
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -815,11 +852,8 @@ class WallOfRoots (Card):
 # Explore is a card that costs 2 and has an ability that says: You may play an additional land this turn. Draw a card.
 class Explore(Card):
     name = 'Explore'
-    _cost = 2
+    cost:int = 2
     cardtype = 'Sorcery'
-
-    def __init__(self):
-        pass
 
     def play(self, controller: Player):
         controller.land_drops += 1
@@ -829,9 +863,9 @@ class Explore(Card):
 # Chancellor of the Tangle costs 7 and has an ability that says: You may reveal this card from your opening hand. If you do, at the beginning of your first main phase, add 1 to your mana pool
 class ChancellorOfTheTangle(Card):
     name = 'Chancellor of the Tangle'
-    _cost = 7
+    cost:int = 7
     cardtype = 'Creature'
-    _activation_cost = 0
+    activation_cost:int = 0 # Costs nothing to attack
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -863,7 +897,7 @@ class ChancellorOfTheTangle(Card):
 # Wild Growth is an enchantment that costs 1 and has an ability that says: Whenever enchanted land is tapped for mana, its controller adds an additional mana
 class WildGrowth(Card):
     name = 'Wild Growth'
-    _cost = 1
+    cost:int = 1
     cardtype = 'Enchantment'
 
     def __init__(self):
@@ -871,7 +905,7 @@ class WildGrowth(Card):
 
     def play(self, controller: Player):
         controller.lands += 1 # Simulate effect by just adding an additional land
-        # If there is at least one unused mana when this is played, then add 1 to the mana pool, implying that we played this against an untapped land.  
+        # If there is at least one unused mana when this is played, then add 1 to the mana pool, implying that we played this against an untapped land.
         #  Note: This isn't perfect, but it's probably good 'nuff.
         if controller.mana_pool > 0 and controller.lands > 0:
             controller.mana_pool += 1
@@ -880,15 +914,15 @@ class WildGrowth(Card):
 # Search for Tomorrow is a sorcery that costs 3 and says: Search your library for a basic land card, put it onto the battlefield, then shuffle. Suspend 2— (Rather than cast this card from your hand, you may pay  and exile it with two time counters on it. At the beginning of your upkeep, remove a time counter. When the last is removed, cast it without paying its mana cost.)
 class SearchForTomorrow(Card):
     name = 'Search for Tomorrow'
-    _cost = 3
-    _alternate_cost = 1
+    cost:int = 3
+    alt_cost:int = 1
     cardtype = 'Sorcery'
 
     def __init__(self):
         self.time_counters = 0
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self._cost))
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -916,7 +950,7 @@ class SearchForTomorrow(Card):
 # Recross the Paths is a sorcery that costs 3 and says: Reveal cards from the top of your library until you reveal a land card. Put that card onto the battlefield and the rest on the bottom of your library in any order. Clash with an opponent. If you win, return Recross the Paths to its owner's hand.
 class RecrossThePaths(Card):
     name = 'Recross the Paths'
-    _cost = 3
+    cost:int = 3
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -951,8 +985,8 @@ class RecrossThePaths(Card):
 # Ancient Stirrings is a sorcery that costs 1 and says: Look at the top five cards of your library. You may reveal a colorless card from among them and put it into your hand. Then put the rest on the bottom of your library in any order.
 class AncientStirrings(Card):
     name = 'Ancient Stirrings'
-    _cost = 1
-    _alt_cost = 1
+    cost:int = 1
+    alt_cost:int = 1
     cardtype = 'Sorcery'
 
     def do_stirrings(self, controller: Player, target_type: str):
@@ -989,8 +1023,8 @@ class AncientStirrings(Card):
 # Abundant Harvest is a sorcery that costs 1 that says: Choose land or nonland. Reveal cards from the top of your library until you reveal a card of the chosen kind. Put that card into your hand and the rest on the bottom of your library in a random order.
 class AbundantHarvest(Card):
     name = 'Abundant Harvest'
-    _cost = 1
-    _alt_cost = 1
+    cost:int = 1
+    alt_cost:int = 1
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -1002,7 +1036,7 @@ class AbundantHarvest(Card):
             cards, found_card = controller.deck.reveal_cards_until('Forest')
         else:
             cards, found_card = controller.deck.reveal_cards_until_not('Forest')
-        
+
         # Put that card into your hand
         if found_card is not None:
             controller.hand.append(found_card)
@@ -1028,8 +1062,8 @@ class AbundantHarvest(Card):
 # Panglacial Wurm is a creature that costs 7 and says: Trample. While you're searching your library, you may cast Panglacial Wurm from your library.
 class PanglacialWurm(Card):
     name = 'Panglacial Wurm'
-    _cost = 7
-    _activation_cost = 0
+    cost:int = 7
+    activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
 
     def __init__(self):
