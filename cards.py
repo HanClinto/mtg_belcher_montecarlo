@@ -894,8 +894,9 @@ class WildGrowth(Card):
     cost:int = 1
     cardtype = 'Enchantment'
 
-    def __init__(self):
-        pass
+    # Only allow this card to be played if the table contains a Forest
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and controller.table.count_cards('Forest') > 0
 
     def play(self, controller: Player):
         controller.lands += 1 # Simulate effect by just adding an additional land
