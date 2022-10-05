@@ -276,6 +276,8 @@ class Player:
                 new_state = self.copy()
                 # Retrieve the wurm from within the deck
                 wurm = new_state.deck.find_and_remove("Panglacial Wurm", 1)
+                # Add the wurm to our hand
+                new_state.hand.append(wurm)
                 # Cast the wurm
                 new_state.play(wurm[0])
                 new_state.can_cast_wurm_now = False
@@ -973,6 +975,7 @@ class AncientStirrings(Card):
 class PanglacialWurm(Card):
     name = 'Panglacial Wurm'
     _cost = 7
+    _activation_cost = 0
     cardtype = 'Creature'
 
     def __init__(self):
