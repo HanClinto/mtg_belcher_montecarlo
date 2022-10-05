@@ -1,14 +1,14 @@
 
 # CardList extends the list class to add a few methods for dealing with
 # a list of cards.
-import json
 import pickle
+#import msgpack as pickle
 import random
 import time
 from typing import List
 
 MAXINT = 2**31 - 1
-
+LOGGING_ENABLED = False
 class Cards(list):
     def __init__(self, cards=None, randseed=None):
         super().__init__()
@@ -164,7 +164,7 @@ class Player:
         self.panglacial_in_deck:bool = self.deck.count_cards('Panglacial Wurm') > 0
 
     def draw(self, quantity=1):
-        self.log.append(f" Draw {quantity} card(s)")
+        self.debug_log(f" Draw {quantity} card(s)")
         for i in range(quantity):
             self.hand.append(self.deck.draw())
 
@@ -185,7 +185,7 @@ class Player:
                 print(f' ERROR: Cannot play {card}')
                 raise Exception(f' ERROR: Cannot play {card}')
             else:
-                self.log.append(f" Play: {card}")
+                self.debug_log(f" Play: {card}")
                 self.hand.remove(card)
                 self.mana_pool -= card.cost
                 card.play(self)
@@ -207,7 +207,7 @@ class Player:
                 print(f' ERROR: Cannot alt play {card}')
                 raise Exception(f' ERROR: Cannot alt play {card}')
             else:
-                self.log.append(f" Alt play: {card}")
+                self.debug_log(f" Alt play: {card}")
                 self.hand.remove(card)
                 self.mana_pool -= card.alt_cost
                 card.alt_play(self)
@@ -231,7 +231,7 @@ class Player:
                 print(f' ERROR: Cannot activate {card}')
                 raise Exception(f' ERROR: Cannot activate {card}')
             else:
-                self.log.append(f" Activate: {card}")
+                self.debug_log(f" Activate: {card}")
                 self.mana_pool -= card.activation_cost
                 card.activate(self)
 
@@ -250,10 +250,10 @@ class Player:
         # If there are two or more instant and sorcery cards in your graveyard, you have spellmastery
         return self.graveyard.count_cards('Instant') + self.graveyard.count_cards('Sorcery') >= 2
 
-    def start_turn(self):
+    def start_turn(self) -> 'Player':
         # Increment turn count
         self.current_turn += 1
-        self.log.append(f"Beginning turn {self.current_turn}: " + self.short_str())
+        self.debug_log(f"Beginning turn {self.current_turn}: " + self.short_str())
         # If it's the first turn, shuffle up and draw 7 cards
         if self.current_turn == 1:
             self.deck.shuffle()
@@ -276,6 +276,8 @@ class Player:
         if self.current_turn > 1:
             self.draw()
 
+        return self
+
     def check_win(self) -> bool:
         return self.opponent_lifetotal <= 0
 
@@ -289,7 +291,7 @@ class Player:
             # Return a list of game states that are possible from the current state
             # This is used to generate a tree of possible game states
             if self.check_win():
-                self.log.append("!!!You are a win!!!")
+                self.debug_log("!!!You are a win!!!")
                 self.childstates = [self]
                 return self.childstates
 
@@ -466,6 +468,10 @@ class Player:
             card = self.deck.find_and_remove(card_name)[0]
             self.hand.append(card)
         return self.hand.find(card_name)[0]
+
+    def debug_log(self, msg):
+        if LOGGING_ENABLED:
+            self.log.append(msg)
 
 # Define generic Card class that has a cost, name, and ability function
 class Card:
@@ -724,7 +730,7 @@ class GoblinCharbelcher(Card):
         controller.opponent_lifetotal -= len(cards)
         controller.deck.put_on_bottom(cards)
         lands_in_deck = controller.deck.count_cards('Forest')
-        controller.log.append(f'  Belcher with {lands_in_deck} lands in deck')
+        controller.debug_log(f'  Belcher with {lands_in_deck} lands in deck')
 
 # Elvish Mystic is a card that costs 1 and has an ability that increases a player's mana pool by 1
 #  NOTE: This is a bit of a hack, but when we play it we simply increase the player's land count by 1,
@@ -903,7 +909,7 @@ class ChancellorOfTheTangle(Card):
         # If the card is in the opening hand, add 1 to the mana pool
         if controller.hand.count(self) > 0:
             if controller.current_turn == 1:
-                controller.log.append(f'  Chancellor of the Tangle adding 1 to mana pool')
+                controller.debug_log(f'  Chancellor of the Tangle adding 1 to mana pool')
                 controller.mana_pool += 1
 
     def can_activate(self, controller: Player) -> bool:
@@ -913,9 +919,9 @@ class ChancellorOfTheTangle(Card):
         self.is_tapped = True
         controller.opponent_lifetotal -= 6
         if controller.opponent_lifetotal <= 0:
-            controller.log.append(f'  Chancellor of the Tangle attacked for 6 and won the game')
+            controller.debug_log(f'  Chancellor of the Tangle attacked for 6 and won the game')
         else:
-            controller.log.append(f'  Chancellor of the Tangle attacked for 6')
+            controller.debug_log(f'  Chancellor of the Tangle attacked for 6')
 
 # Wild Growth is an enchantment that costs 1 and has an ability that says: Whenever enchanted land is tapped for mana, its controller adds an additional mana
 class WildGrowth(Card):
@@ -967,7 +973,7 @@ class SearchForTomorrow(Card):
         # If we are in the controller's exile zone, then remove a time counter
         if self in controller.exile:
             self.time_counters -= 1
-            controller.log.append(f'  Suspend: Search for Tomorrow has {self.time_counters} time counters')
+            controller.debug_log(f'  Suspend: Search for Tomorrow has {self.time_counters} time counters')
             # If the last time counter is removed, then cast the card
             if self.time_counters == 0:
                 self.play(controller)
@@ -989,10 +995,10 @@ class RecrossThePaths(Card):
             controller.table.append(land)
             controller.lands += 1
             controller.mana_pool += 1
-            controller.log.append(f'  Recross the Paths: Found a land')
+            controller.debug_log(f'  Recross the Paths: Found a land')
             cards.remove(land)
         else:
-            controller.log.append(f'  Recross the Paths: No land found. Deck stacked')
+            controller.debug_log(f'  Recross the Paths: No land found. Deck stacked')
         # Put the rest of the cards back on the bottom of the library
         # Sort the cards so that any Goblin Charbelchers are at the top, and any other cards at the bottom in an arbitrary order.
         remaining_cards = []
@@ -1108,6 +1114,6 @@ class PanglacialWurm(Card):
         self.is_tapped = True
         controller.opponent_lifetotal -= 9
         if controller.opponent_lifetotal <= 0:
-            controller.log.append(f'  Panglacial Wurm attacked for 9 and won the game')
+            controller.debug_log(f'  Panglacial Wurm attacked for 9 and won the game')
         else:
-            controller.log.append(f'  Panglacial Wurm attacked for 9')
+            controller.debug_log(f'  Panglacial Wurm attacked for 9')
