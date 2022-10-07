@@ -721,13 +721,14 @@ class GoblinCharbelcher(Card):
     # NOTE: Should we allow the user to activate with forests still remaining in the deck?  It feels very shuffle-dependent, and I would like to optimize for the case where we can belcher the opponent out of the game guaranteed.
     def can_activate(self, controller: Player) -> bool:
         return (super().can_activate(controller)
-            and not self.is_tapped
-            and controller.deck.count_cards('Forest') == 0)
+            and not self.is_tapped)
+            #and controller.deck.count_cards('Forest') == 0)
 
     def activate(self, controller: Player):
         self.is_tapped = True
         cards, revealed_card = controller.deck.reveal_cards_until('Forest')
-        controller.opponent_lifetotal -= len(cards)
+        # HACK: To make it less appealing to belcher early, let's make it so that belcher only does half damage.
+        controller.opponent_lifetotal -= int(len(cards) / 2)
         controller.deck.put_on_bottom(cards)
         lands_in_deck = controller.deck.count_cards('Forest')
         controller.debug_log(f'  Belcher with {lands_in_deck} lands in deck')
