@@ -634,13 +634,41 @@ class ArborealGrazer (Card):
         super().play(controller)
         # Put a land into play tapped
         cards = controller.hand.find_and_remove('Forest', 1)
-        controller.check_panglacial()
         controller.table.extend(cards)
         controller.lands += len(cards)
 
     # Only let us play this card if we have at least 1 Forest in hand.
     def can_play(self, controller: Player) -> bool:
         return super().can_play(controller) and controller.hand.count_cards('Forest') > 0
+
+# Krosan Wayfarer is a creature that costs 1 that says "Sacrifice Krosan Wayfarer: You may put a land card from your hand onto the battlefield."
+class KrosanWayfarer (Card):
+    name = 'Krosan Wayfarer'
+    cost:int = 1
+    cardtype = 'Creature'
+    activation_cost: int = 0
+
+    def play(self, controller: Player):
+        super().play(controller)
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller)
+
+    def can_activate(self, controller: Player) -> bool:
+        return (super().can_activate(controller) 
+            and self in controller.table 
+            and controller.hand.count_cards('Forest') > 0)
+
+    def activate(self, controller: Player):
+        super().activate(controller)
+        # Put a land into play untapped
+        cards = controller.hand.find_and_remove('Forest', 1)
+        controller.table.extend(cards)
+        controller.lands += len(cards)
+        controller.mana_pool += len(cards)
+        # Immediately sacrifice this
+        controller.table.remove(self)
+        controller.graveyard.append(self)
 
 # Reclaim the Wastes is a card that costs 1 and when played, searches the deck for a land and puts it into the player's hand.
 #  It has an alternate cost of 4 that searches for 2 lands instead.
@@ -728,7 +756,8 @@ class GoblinCharbelcher(Card):
         self.is_tapped = True
         cards, revealed_card = controller.deck.reveal_cards_until('Forest')
         # HACK: To make it less appealing to belcher early, let's make it so that belcher only does half damage.
-        controller.opponent_lifetotal -= int(len(cards) / 2)
+        damage = int(len(cards) * 2.0 / 3.0)
+        controller.opponent_lifetotal -= damage
         controller.deck.put_on_bottom(cards)
         lands_in_deck = controller.deck.count_cards('Forest')
         controller.debug_log(f'  Belcher with {lands_in_deck} lands in deck')
