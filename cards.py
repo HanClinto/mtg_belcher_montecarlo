@@ -172,8 +172,7 @@ class Player:
 
     def mulligan(self, mulligan_to=6):
         # Only permit a mulligan on turn 0 before any actions are taken.
-        if self.current_turn != 0:
-            return
+        assert self.current_turn == 0, "Cannot mulligan after turn 0"
 
         self.debug_log(f" Mulligan to {mulligan_to} cards")
         # Return all cards in hand to the deck
@@ -202,13 +201,10 @@ class Player:
         for card in self.exile:
             card.do_upkeep(self)        
 
-        # Draw a card for turn if it's not the first turn
-        if self.current_turn > 1:
-            self.draw()
-
     def has_mana(self, cost, colorless_cost=0):
+        colored_cost = cost - colorless_cost
         return ((self.mana_pool + self.colorless_mana_pool >= cost) and 
-            (self.colorless_mana_pool >= colorless_cost))
+            (self.mana_pool >= colored_cost))
 
     def adjust_mana_pool(self, cost, colorless_cost=0):
         colorless_usage = 0
@@ -217,8 +213,8 @@ class Player:
             self.colorless_mana_pool -= colorless_usage
         self.mana_pool -= (cost - colorless_usage)
 
-        assert(self.mana_pool >= 0)
-        assert(self.colorless_mana_pool >= 0)
+        assert self.mana_pool >= 0
+        assert self.colorless_mana_pool >= 0
 
     def can_play(self, card) -> bool:
         card = self.hand.get_card(card)
@@ -234,8 +230,8 @@ class Player:
 
         if card in self.hand:
             if not card.can_play(self):
-                print(f' ERROR: Cannot play {card}')
-                raise Exception(f' ERROR: Cannot play {card}')
+                print(f' ERROR: Cannot play {card}. Mana cost is {card.cost} and mana pool is {self.mana_pool} ({self.colorless_mana_pool})')
+                raise Exception(f' ERROR: Cannot play {card}. Mana cost is {card.cost} and mana pool is {self.mana_pool} ({self.colorless_mana_pool})')
             else:
                 self.debug_log(f" Play: {card}")
                 self.hand.remove(card)
@@ -304,10 +300,9 @@ class Player:
 
     def start_game(self) -> 'Player':
         # If it's the first turn, shuffle up and draw 7 cards
-        if self.current_turn == 1:
+        if self.current_turn == 0:
             self.deck.shuffle()
             self.draw(7)
-
 
     def start_turn(self) -> 'Player':
         # Increment turn count
@@ -452,6 +447,10 @@ class Player:
                 # TODO: Evaluate the baseline to see if this measurably increases win rate or not.
                 # Just because we CAN do something on our turn, is there ever any benefit to NOT doing it on our turn?
                 # Or should we attempt to always use every resource available to us?
+                # NOTE: Examples of cards that may benefit from this are:
+                #   * Simian Spirit Guide
+                #   * Elvish Spirit Guide
+                #   * Possibly Caravan Vigil...?
                 #copy = self.copy()
                 #copy.start_turn()
                 #next_states.append(copy)
@@ -565,7 +564,7 @@ class Card:
         self.resolve(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
-        return controller.has_mana(self.alt_cost, self.alt_colorless_cost)
+        return controller.has_mana(self.alt_cost, self.colorless_alt_cost)
 
     def activate(self, controller: Player):
         pass
@@ -1252,4 +1251,26 @@ class SolRing(Card):
         # Instead of activating this, just add to our mana pool directly.
         controller.colorless_lands += 2
         controller.colorless_mana_pool += 2
+        super().play(controller)
+
+# Simian Spirit Guide is a creature that you may exile from your hand to add 1 red (colorless) mana to your mana pool.
+class SimianSpiritGuide(Card):
+    name = 'Simian Spirit Guide'
+    cost:int = 0
+    cardtype = 'Creature'
+
+    def play(self, controller: Player):
+        # Instead of activating this, just add to our mana pool directly.
+        controller.colorless_mana_pool += 1
+        super().play(controller)
+
+# Elvish Spirit Guide is a creature that you may exile from your hand to add 1 green mana to your mana pool.
+class ElvishSpiritGuide(Card):
+    name = 'Elvish Spirit Guide'
+    cost:int = 0
+    cardtype = 'Creature'
+
+    def play(self, controller: Player):
+        # Instead of activating this, just add to our mana pool directly.
+        controller.mana_pool += 1
         super().play(controller)
