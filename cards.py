@@ -168,6 +168,42 @@ class Player:
         for i in range(quantity):
             self.hand.append(self.deck.draw())
 
+    def mulligan(self, mulligan_to=6):
+        # Only permit a mulligan on turn 0 before any actions are taken.
+        if self.current_turn != 0:
+            return
+
+        self.debug_log(f" Mulligan to {mulligan_to} cards")
+        # Return all cards in hand to the deck
+        self.deck.extend(self.hand)
+        # Shuffle
+        self.deck.shuffle()
+        # Draw new hand
+        self.draw(mulligan_to)
+        # TODO: Implement London Mulligan rules instead of this variety.
+
+        # Run upkeep and everything for the new hand
+        self.debug_log(f"Beginning turn {self.current_turn} after mulligan: " + self.short_str())
+        # Untap all mana
+        self.mana_pool = self.lands
+        # Reset flags and counts
+        self.creature_died_this_turn = False
+        self.land_drops = 1
+        self.can_cast_wurm_now = False
+        # Upkeep for permanents on table and cards in hand
+        for card in self.table:
+            card.do_upkeep(self)
+        for card in self.hand:
+            card.do_upkeep(self)
+        for card in self.exile:
+            card.do_upkeep(self)        
+
+        # Draw a card for turn if it's not the first turn
+        if self.current_turn > 1:
+            self.draw()
+
+
+
     def can_play(self, card) -> bool:
         card = self.hand.get_card(card)
         if card is None:
@@ -250,14 +286,17 @@ class Player:
         # If there are two or more instant and sorcery cards in your graveyard, you have spellmastery
         return self.graveyard.count_cards('Instant') + self.graveyard.count_cards('Sorcery') >= 2
 
-    def start_turn(self) -> 'Player':
-        # Increment turn count
-        self.current_turn += 1
-        self.debug_log(f"Beginning turn {self.current_turn}: " + self.short_str())
+    def start_game(self) -> 'Player':
         # If it's the first turn, shuffle up and draw 7 cards
         if self.current_turn == 1:
             self.deck.shuffle()
             self.draw(7)
+
+
+    def start_turn(self) -> 'Player':
+        # Increment turn count
+        self.current_turn += 1
+        self.debug_log(f"Beginning turn {self.current_turn}: " + self.short_str())
         # Untap all mana
         self.mana_pool = self.lands
         # Reset flags and counts
@@ -548,10 +587,6 @@ class LayOfTheLand (Card):
     cost:int = 1
     cardtype = 'Sorcery'
 
-    def __init__(self):
-        self.mana_value = 1
-        pass
-
     def can_play(self, controller: Player) -> bool:
         return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
@@ -750,7 +785,8 @@ class GoblinCharbelcher(Card):
     def can_activate(self, controller: Player) -> bool:
         return (super().can_activate(controller)
             and not self.is_tapped)
-            #and controller.deck.count_cards('Forest') == 0)
+            # NOTE: Experimentally, we can try to ONLY allow activation if there are no lands in the deck.  This will make the game more difficult, but it will also make it more fair because the AI won't be able to know "secret knowledge" of how the deck is stacked.
+            # and controller.deck.count_cards('Forest') == 0)
 
     def activate(self, controller: Player):
         self.is_tapped = True
