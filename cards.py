@@ -141,7 +141,9 @@ class Cards(list):
 class Player:
     land_drops:int = 0
     lands:int = 0
+    colorless_lands:int = 0
     mana_pool:int = 0
+    colorless_mana_pool:int = 0
     current_turn:int = 0
     creature_died_this_turn:bool = False
     opponent_lifetotal:int = 20
@@ -186,6 +188,8 @@ class Player:
         self.debug_log(f"Beginning turn {self.current_turn} after mulligan: " + self.short_str())
         # Untap all mana
         self.mana_pool = self.lands
+        self.colorless_mana_pool = self.colorless_lands
+
         # Reset flags and counts
         self.creature_died_this_turn = False
         self.land_drops = 1
@@ -202,7 +206,19 @@ class Player:
         if self.current_turn > 1:
             self.draw()
 
+    def has_mana(self, cost, colorless_cost=0):
+        return ((self.mana_pool + self.colorless_mana_pool >= cost) and 
+            (self.colorless_mana_pool >= colorless_cost))
 
+    def adjust_mana_pool(self, cost, colorless_cost=0):
+        colorless_usage = 0
+        if self.colorless_mana_pool > 0 and colorless_cost > 0:
+            colorless_usage = min(self.colorless_mana_pool, colorless_cost)
+            self.colorless_mana_pool -= colorless_usage
+        self.mana_pool -= (cost - colorless_usage)
+
+        assert(self.mana_pool >= 0)
+        assert(self.colorless_mana_pool >= 0)
 
     def can_play(self, card) -> bool:
         card = self.hand.get_card(card)
@@ -223,7 +239,7 @@ class Player:
             else:
                 self.debug_log(f" Play: {card}")
                 self.hand.remove(card)
-                self.mana_pool -= card.cost
+                self.adjust_mana_pool(card.cost, card.colorless_cost)
                 card.play(self)
 
     def can_alt_play(self, card) -> bool:
@@ -245,7 +261,7 @@ class Player:
             else:
                 self.debug_log(f" Alt play: {card}")
                 self.hand.remove(card)
-                self.mana_pool -= card.alt_cost
+                self.adjust_mana_pool(card.alt_cost, card.colorless_alt_cost)
                 card.alt_play(self)
 
     def can_activate(self, card) -> bool:
@@ -268,14 +284,14 @@ class Player:
                 raise Exception(f' ERROR: Cannot activate {card}')
             else:
                 self.debug_log(f" Activate: {card}")
-                self.mana_pool -= card.activation_cost
+                self.adjust_mana_pool(card.activation_cost, 0)
                 card.activate(self)
 
     def panglacial_potential(self, additional_cost) -> bool:
         if not self.panglacial_in_deck:
             return False
         # Check if we have a Panglacial Wurm in our deck, and have enough mana to cast it.
-        return (self.mana_pool >= PanglacialWurm.cost + additional_cost
+        return (self.has_mana(PanglacialWurm.cost + additional_cost, PanglacialWurm.colorless_cost)
             and self.deck.count("Panglacial Wurm") > 0)
 
     def check_panglacial(self):
@@ -299,6 +315,7 @@ class Player:
         self.debug_log(f"Beginning turn {self.current_turn}: " + self.short_str())
         # Untap all mana
         self.mana_pool = self.lands
+        self.colorless_mana_pool = self.colorless_lands
         # Reset flags and counts
         self.creature_died_this_turn = False
         self.land_drops = 1
@@ -479,6 +496,7 @@ class Player:
         s = f"Turn [{self.current_turn}] - Opponent Life: {self.opponent_lifetotal}\n"
         s += f" {self.deck.count_cards('Forest')} Forests in library\n"
         s += f" Lands: {self.mana_pool} / {self.lands}  ({self.land_drops} drops avail.)\n"
+        s += f" Colorless: {self.colorless_mana_pool} / {self.colorless_lands}\n"
         s += f" Hand: {len(self.hand)} cards\n"
         # Display the hand sorted alphabetically
         for card in sorted(self.hand, key=lambda x: x.name):
@@ -498,7 +516,7 @@ class Player:
     def short_str(self) -> str:
         # Print out the player's current state in a very short format
         # Current turn, number of lands left in our deck, number of cards in hand, mana in our pool, lands on the field, opponent's life total, and the last log entry
-        return f"{self.current_turn})  LID: {self.deck.count_cards('Forest')}  H: {len(self.hand)}  Mana: {self.mana_pool}/{self.lands} [{self.hand.count_cards('Forest')}]  OLife: {self.opponent_lifetotal} '{self.log[-1]}'"
+        return f"{self.current_turn})  LID: {self.deck.count_cards('Forest')}  H: {len(self.hand)}  Mana: {self.mana_pool}/{self.lands} ({self.colorless_mana_pool}/{self.colorless_lands}) [{self.hand.count_cards('Forest')}]  OLife: {self.opponent_lifetotal} '{self.log[-1]}'"
 
     # Methods to support testing
     def debug_force_get_card_in_hand(self, card_name) -> 'Card':
@@ -516,8 +534,10 @@ class Player:
 class Card:
     name:str = 'card'
     cost:int = 0
+    colorless_cost:int = 0 # Colorless portion of the cost
     alt_cost:int = MAXINT
-    activation_cost:int = MAXINT
+    colorless_alt_cost:int = 3 # Colorless portion of the alternate cost
+    activation_cost:int = MAXINT # Assume all activations are colorless
     cardtype:str = 'None'
     prefer_alt:bool = False # If the alternate cost is available, don't evaluate the regular cost.  This is useful for cards like Caravan Vigil and Land Grant.
 
@@ -539,19 +559,20 @@ class Card:
             controller.graveyard.append(self)
 
     def can_play(self, controller: Player) -> bool:
-        return self.cost <= controller.mana_pool
+        return controller.has_mana(self.cost, self.colorless_cost)
 
     def alt_play(self, controller: Player):
         self.resolve(controller)
 
     def can_alt_play(self, controller: Player) -> bool:
-        return self.alt_cost <= controller.mana_pool
+        return controller.has_mana(self.alt_cost, self.alt_colorless_cost)
 
     def activate(self, controller: Player):
         pass
 
     def can_activate(self, controller: Player) -> bool:
-        return self.activation_cost <= controller.mana_pool
+        # HACK: Assume all activation costs are colorless (which is true at the time of this writing)
+        return controller.has_mana(self.activation_cost, self.activation_cost)
 
     def is_permanent(self) -> bool:
         return not (self.cardtype == 'Instant' or self.cardtype == 'Sorcery')
@@ -635,6 +656,7 @@ class CaravanVigil (Card):
 class SakuraTribeElder (Card):
     name = 'Sakura-Tribe Elder'
     cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Creature'
     activation_cost:int = 0
 
@@ -711,6 +733,7 @@ class ReclaimTheWastes (Card):
     name = 'Reclaim the Wastes'
     cost:int = 1
     alt_cost:int = 4
+    colorless_alt_cost:int = 3 # Colorless portion of the alternate cost
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -740,6 +763,7 @@ class ReclaimTheWastes (Card):
 class LandGrant(Card):
     name = 'Land Grant'
     cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
     alt_cost:int = 0
     cardtype = 'Sorcery'
     prefer_alt = True
@@ -772,6 +796,7 @@ class LandGrant(Card):
 class GoblinCharbelcher(Card):
     name = 'Goblin Charbelcher'
     cost:int = 4
+    colorless_cost:int = 4 # Colorless portion of the cost
     activation_cost:int = 3
     cardtype = 'Artifact'
 
@@ -835,6 +860,7 @@ class LlanowarElves (Card):
 class RampantGrowth(Card):
     name = 'Rampant Growth'
     cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Sorcery'
 
     def can_play(self, controller: Player) -> bool:
@@ -857,7 +883,9 @@ class RampantGrowth(Card):
 class NissasPilgrimage(Card):
     name = 'Nissa\'s Pilgrimage'
     cost:int = 3
+    colorless_cost:int = 2 # Colorless portion of the cost
     alt_cost:int = 3
+    colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
     prefer_alt = True
 
     def __init__(self):
@@ -904,6 +932,7 @@ class NissasPilgrimage(Card):
 class WallOfRoots (Card):
     name = 'Wall of Roots'
     cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Creature'
 
     def play(self, controller: Player):
@@ -948,6 +977,7 @@ class WallOfRoots (Card):
 class Explore(Card):
     name = 'Explore'
     cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Sorcery'
 
     def play(self, controller: Player):
@@ -959,6 +989,7 @@ class Explore(Card):
 class ChancellorOfTheTangle(Card):
     name = 'Chancellor of the Tangle'
     cost:int = 7
+    colorless_cost:int = 4 # Colorless portion of the cost
     cardtype = 'Creature'
     activation_cost:int = 0 # Costs nothing to attack
 
@@ -1011,6 +1042,7 @@ class WildGrowth(Card):
 class SearchForTomorrow(Card):
     name = 'Search for Tomorrow'
     cost:int = 3
+    colorless_cost:int = 2 # Colorless portion of the cost
     alt_cost:int = 1
     cardtype = 'Sorcery'
 
@@ -1048,6 +1080,7 @@ class SearchForTomorrow(Card):
 class RecrossThePaths(Card):
     name = 'Recross the Paths'
     cost:int = 3
+    colorless_cost:int = 3 # Colorless portion of the cost
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -1160,6 +1193,7 @@ class AbundantHarvest(Card):
 class PanglacialWurm(Card):
     name = 'Panglacial Wurm'
     cost:int = 7
+    colorless_cost:int = 5 # Colorless portion of the cost is 5
     activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
 
@@ -1183,3 +1217,16 @@ class PanglacialWurm(Card):
             controller.debug_log(f'  Panglacial Wurm attacked for 9 and won the game')
         else:
             controller.debug_log(f'  Panglacial Wurm attacked for 9')
+
+# Sol Ring is an artifact that costs 1 and taps for 2 colorless mana.
+class SolRing(Card):
+    name = 'Sol Ring'
+    cost:int = 1
+    activation_cost:int = 0 # Costs nothing to activate
+    cardtype = 'Artifact'
+
+    def play(self, controller: Player):
+        # Instead of activating this, just add to our mana pool directly.
+        controller.colorless_lands += 2
+        controller.colorless_mana_pool += 2
+        super().play(controller)
