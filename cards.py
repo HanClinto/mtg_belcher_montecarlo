@@ -536,7 +536,7 @@ class Card:
     cost:int = 0
     colorless_cost:int = 0 # Colorless portion of the cost
     alt_cost:int = MAXINT
-    colorless_alt_cost:int = 3 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 0 # Colorless portion of the alternate cost
     activation_cost:int = MAXINT # Assume all activations are colorless
     cardtype:str = 'None'
     prefer_alt:bool = False # If the alternate cost is available, don't evaluate the regular cost.  This is useful for cards like Caravan Vigil and Land Grant.
@@ -855,6 +855,29 @@ class LlanowarElves (Card):
         # Instead of activating to add mana to our mana pool, just treat it as a new land so we don't have as many branching permutations.
         controller.lands += 1
         super().play(controller)
+
+# Arbor Elf is a creature of cost 1 that has an ability that adds 1 to the mana pool, unless there is a Wild Growth in play, in which case it adds 2.
+class ArborElf (Card):
+    name = 'Arbor Elf'
+    cost:int = 1
+    cardtype = 'Creature'
+
+    def play(self, controller: Player):
+        self.is_tapped = True
+        super().play(controller)
+
+    def can_activate(self, controller: Player) -> bool:
+        return not self.is_tapped and self in controller.table and controller.table.count_cards('Forest') > 0
+
+    def activate(self, controller: Player):
+        # If we have a Wild Growth in play, add 2 mana instead of 1
+        if controller.table.count_cards('Wild Growth') > 0:
+            controller.mana_pool += 2
+        elif controller.table.count_cards('Forest') > 0:
+            controller.mana_pool += 1
+        else:
+            controller.mana_pool += 0
+        self.is_tapped = True
 
 # Rampant Growth is a card with an ability: Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.
 class RampantGrowth(Card):
