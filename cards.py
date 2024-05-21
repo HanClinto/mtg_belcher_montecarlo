@@ -1264,7 +1264,10 @@ class SimianSpiritGuide(Card):
     def play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
         controller.colorless_mana_pool += 1
-        super().play(controller)
+        # Exile it instead of adding it to the table
+        # super().play(controller)
+        controller.exile.append(self)
+
 
 # Elvish Spirit Guide is a creature that you may exile from your hand to add 1 green mana to your mana pool.
 class ElvishSpiritGuide(Card):
@@ -1275,7 +1278,9 @@ class ElvishSpiritGuide(Card):
     def play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
         controller.mana_pool += 1
-        super().play(controller)
+        # Exile it instead of adding it to the table
+        # super().play(controller)
+        controller.exile.append(self)
 
 # Beneath the Sands is a sorcery that costs 3 and says: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle.  Cycling 2 (2, Discard this card: Draw a card)
 class BeneathTheSands(Card):
@@ -1400,6 +1405,17 @@ class GenerousEnt(Card):
         # controller.food_tokens += 1
         super().play(controller)
 
+    # Alt play is forestcycling
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    def alt_play(self, controller: Player):
+        cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
+        controller.hand.extend(cards)
+        # Add this card to the graveyard
+        controller.graveyard.append(self)
+
     def can_activate(self, controller: Player) -> bool:
         return (not self.is_tapped) and (self in controller.table)
 
@@ -1430,7 +1446,8 @@ class Cultivate(Card):
         cards = controller.deck.find_and_remove('Forest', search_count)
         controller.check_panglacial()
 
-        # If we only found one card and we have a land drop available and no other forests in hand, then put it into our hand instead of onto the battlefield
+        # If we only found one card and we have a land drop available and no other forests in hand, then put it into our hand instead of onto the battlefield.
+        # TODO: Perhaps only make this optimization as a line that's available under "alt play" so that we can determine if it's worth our time to consider this line of play or not.
         if len(cards) == 1 and controller.land_drops > 0 and controller.hand.count_cards('Forest') == 0:
             pass
         # Otherwise, just put the one card into play like normal.
@@ -1442,6 +1459,7 @@ class Cultivate(Card):
         # Then add the rest to the hand
         controller.hand.extend(cards)
         super().play(controller)
+
 
 # Beanstalk Giant is a */* creature that costs 7 and says: Beanstalk Giant's power and toughness are each equal to the number of lands you control.  Adventure - Fertile Footsteps (2G) Search your library for a basic land card, put it onto the battlefield, then shuffle.
 class BeanstalkGiant(Card):
@@ -1479,6 +1497,7 @@ class BeanstalkGiant(Card):
     def can_alt_play(self, controller: Player) -> bool:
         return super().can_alt_play(controller) and not self.has_gone_on_an_adventure and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.alt_cost))
     
+    # Go on an adventure -- search for a basic land card and put it onto the battlefield (untapped)
     def alt_play(self, controller: Player):
         # Add an untapped forest
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -1527,3 +1546,24 @@ class GrowFromTheAshes(Card):
         controller.mana_pool += len(cards)
 
         super().play(controller)
+
+# Nissa's Triumph is a sorcery that costs 2 and says: Search your library for up to two basic Forest cards. If you control a Nissa planeswalker, instead search your library for up to three land cards. Reveal those cards, put them into your hand, then shuffle.
+# NOTE: We will not implement the Nissa planeswalker check, as we are not currently implementing planeswalkers.
+class NissasTriumph(Card):
+    name = 'Nissa\'s Triumph'
+    cost:int = 2
+    colorless_cost:int = 0 # Colorless portion of the cost
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    def play(self, controller: Player):
+        cards = controller.deck.find_and_remove('Forest', 2)
+        controller.check_panglacial()
+        controller.hand.extend(cards)
+        super().play(controller)
+
