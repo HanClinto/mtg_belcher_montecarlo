@@ -1076,6 +1076,7 @@ class SearchForTomorrow(Card):
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
         controller.table.extend(cards)
         controller.lands += 1
         controller.mana_pool += 1 # The land comes into play untapped, so immediately add it to the mana pool.
@@ -1244,6 +1245,7 @@ class PanglacialWurm(Card):
 class SolRing(Card):
     name = 'Sol Ring'
     cost:int = 1
+    colorless_cost:int = 1 # Colorless portion of the cost
     activation_cost:int = 0 # Costs nothing to activate
     cardtype = 'Artifact'
 
@@ -1273,4 +1275,255 @@ class ElvishSpiritGuide(Card):
     def play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
         controller.mana_pool += 1
+        super().play(controller)
+
+# Beneath the Sands is a sorcery that costs 3 and says: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle.  Cycling 2 (2, Discard this card: Draw a card)
+class BeneathTheSands(Card):
+    name = 'Beneath the Sands'
+    cost:int = 3
+    colorless_cost:int = 2 # Colorless portion of the cost
+    alt_cost:int = 2 # (Cycling)
+    colorless_alt_cost = 2 # Colorless portion of the alternate cost
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    def play(self, controller: Player):
+        cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
+        # Add a tapped forest
+        controller.lands += len(cards)
+        controller.table.extend(cards)
+        super().play(controller)
+
+    # Alt play is cycling
+    def alt_play(self, controller: Player):
+        controller.draw()
+        super().alt_play(controller)
+
+# Migration Path is a sorcery that costs 4 and says: Search your library for up to two basic land cards, put them onto the battlefield tapped, then shuffle. Cycling 2 (2, Discard this card: Draw a card)
+# NOTE: Explosive Vegetation and Circuitous Route are functionally identical to Migration Path (except without the cycling ability), so we will not implement them unless Migration Path sees play.
+class MigrationPath(Card):
+    name = 'Migration Path'
+    cost:int = 4
+    colorless_cost:int = 3 # Colorless portion of the cost
+    alt_cost:int = 2 # (Cycling)
+    colorless_alt_cost = 2 # Colorless portion of the alternate cost
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    def play(self, controller: Player):
+        search_count = 2
+
+        cards = controller.deck.find_and_remove('Forest', search_count)
+        # Put as many cards as we found onto the battlefield tapped.
+        controller.lands += len(cards)
+        controller.table.extend(cards)
+
+        super().play(controller)
+
+    # Alt play is cycling
+    def alt_play(self, controller: Player):
+        controller.draw()
+        super().alt_play(controller)
+        
+# Edge of Autumn is a sorcery that costs 2 and says: If you control four or fewer lands, search your library for a basic land card, put it onto the battlefield tapped, then shuffle. Cycling - Sacrifice a Land (Sacrifice a Land, Discard this card: Draw a card)
+class EdgeOfAutumn(Card):
+    name = 'Edge of Autumn'
+    cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
+    alt_cost:int = 0 # (Cycling)
+    colorless_alt_cost = 0 # Colorless portion of the alternate cost
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.table.count_cards('Forest') <= 4) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+    
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and controller.table.count_cards('Forest') > 0
+
+    def play(self, controller: Player):
+        # If we have 4 or fewer lands, then search for a basic land card and put it onto the battlefield tapped
+        if controller.table.count_cards('Forest') <= 4:
+            cards = controller.deck.find_and_remove('Forest', 1)
+            controller.check_panglacial()
+            # Add a tapped forest
+            controller.lands += len(cards)
+            controller.table.extend(cards)
+        super().play(controller)
+
+    # Alt play is cycling
+    def alt_play(self, controller: Player):
+        # Sacrifice a land
+        # Grab a forest from the table
+        cards = controller.table.find_and_remove('Forest', 1)
+        # Put it into the graveyard
+        controller.graveyard.extend(cards)
+        # Remove the land from our mana pool for next turn
+        if controller.lands > 0:
+            controller.lands -= 1
+        # Draw a card
+        controller.draw()
+        super().alt_play(controller)
+
+# Generous Ent is a 5/7 creature that costs 6 and says: When Generous Ent enters the battlefield, create a Food token. (It's an artifact with "2, T, Sacrifice this artifact: You gain 3 life.")  Forestcycling 1 (1, Discard this card: Search your library for a Forest card, reveal it, put it into your hand, then shuffle.)
+class GenerousEnt(Card):
+    name = 'Generous Ent'
+    cost:int = 6
+    colorless_cost:int = 5 # Colorless portion of the cost
+    alt_cost:int = 1 # (Forestcycling)
+    colorless_alt_cost = 1 # Colorless portion of the alternate cost
+    cardtype = 'Creature'
+
+    def __init__(self):
+        self.is_tapped:bool = False
+        pass
+
+    def do_upkeep(self, controller: Player):
+        self.is_tapped = False
+
+    def play(self, controller: Player):
+        self.is_tapped = True # Start off tapped to simulate summoning sickness
+        # TODO: Create a food token
+        # controller.food_tokens += 1
+        super().play(controller)
+
+    def can_activate(self, controller: Player) -> bool:
+        return (not self.is_tapped) and (self in controller.table)
+
+    def activate(self, controller: Player):
+        self.is_tapped = True
+        controller.opponent_lifetotal -= 5
+        if controller.opponent_lifetotal <= 0:
+            controller.debug_log(f'  Generous Ent attacked for 5 and won the game')
+        else:
+            controller.debug_log(f'  Generous Ent attacked for 5')
+    
+# Cultivate is a sorcery that costs 3 and says: Search your library for up to two basic land cards, reveal those cards, and put one onto the battlefield tapped and the other into your hand. Then shuffle your library.
+class Cultivate(Card):
+    name = 'Cultivate'
+    cost:int = 3
+    colorless_cost:int = 2 # Colorless portion of the cost
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    def play(self, controller: Player):
+        search_count = 2
+
+        cards = controller.deck.find_and_remove('Forest', search_count)
+        controller.check_panglacial()
+
+        # If we only found one card and we have a land drop available and no other forests in hand, then put it into our hand instead of onto the battlefield
+        if len(cards) == 1 and controller.land_drops > 0 and controller.hand.count_cards('Forest') == 0:
+            pass
+        # Otherwise, just put the one card into play like normal.
+        elif len(cards) > 0:
+            card = cards.pop()
+            controller.table.append(card)
+            controller.lands += 1
+
+        # Then add the rest to the hand
+        controller.hand.extend(cards)
+        super().play(controller)
+
+# Beanstalk Giant is a */* creature that costs 7 and says: Beanstalk Giant's power and toughness are each equal to the number of lands you control.  Adventure - Fertile Footsteps (2G) Search your library for a basic land card, put it onto the battlefield, then shuffle.
+class BeanstalkGiant(Card):
+    name = 'Beanstalk Giant'
+    cost:int = 7
+    colorless_cost:int = 6 # Colorless portion of the cost
+    alt_cost:int = 3 # (Adventure)
+    colorless_alt_cost = 2 # Colorless portion of the alternate cost
+    cardtype = 'Creature'
+
+    def __init__(self):
+        self.is_tapped:bool = False
+        self.has_gone_on_an_adventure:bool = False
+        pass
+
+    def do_upkeep(self, controller: Player):
+        self.is_tapped = False
+
+    def play(self, controller: Player):
+        self.is_tapped = True # Start off tapped to simulate summoning sickness
+        super().play(controller)
+
+    def can_activate(self, controller: Player) -> bool:
+        return (not self.is_tapped) and (self in controller.table)
+
+    def activate(self, controller: Player):
+        self.is_tapped = True
+        num_lands = controller.table.count_cards('Forest')
+        controller.opponent_lifetotal -= num_lands
+        if controller.opponent_lifetotal <= 0:
+            controller.debug_log(f'  Beanstalk Giant attacked for {num_lands} and won the game')
+        else:
+            controller.debug_log(f'  Beanstalk Giant attacked for {num_lands}')
+
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and not self.has_gone_on_an_adventure and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.alt_cost))
+    
+    def alt_play(self, controller: Player):
+        # Add an untapped forest
+        cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
+        controller.table.extend(cards)
+        controller.lands += 1
+        controller.mana_pool += 1 # The land comes into play untapped, so immediately add it to the mana pool.
+        super().alt_play(controller)
+        # Remove ourselves from the graveyard, add ourselves back to the hand, but mark us as having gone on an adventure, so cannot be alt-played again.
+        controller.graveyard.remove(self)
+        controller.hand.append(self)
+        self.has_gone_on_an_adventure = True
+
+# Grow from the Ashes is a sorcery that costs 3 and says: Kicker 2 (You may pay an additional 2 as you cast this spell.) Search your library for a basic land card, put it onto the battlefield, then shuffle. If this spell was kicked, instead search your library for two basic land cards, put them onto the battlefield, then shuffle.
+class GrowFromTheAshes(Card):
+    name = 'Grow from the Ashes'
+    cost:int = 3
+    colorless_cost:int = 2 # Colorless portion of the cost
+    alt_cost:int = 5 # (Cast w/ kicker)
+    colorless_alt_cost = 4 # Colorless portion of the alternate cost
+    cardtype = 'Sorcery'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and (controller.deck.count_cards('Forest') > 1)
+    
+    def play(self, controller: Player):
+        self.do_effect(1)
+
+    def alt_play(self, controller: Player):
+        self.do_effect(2)
+
+    def do_effect(self, controller: Player, search_count:int):
+        cards = controller.deck.find_and_remove('Forest', search_count)
+        controller.check_panglacial()
+
+        # Put as many cards as we found onto the battlefield untapped.
+        controller.lands += len(cards)
+        controller.table.extend(cards)
+        # The lands come into play untapped, so immediately add them to our mana pool
+        controller.mana_pool += len(cards)
+
         super().play(controller)
