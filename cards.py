@@ -9,6 +9,12 @@ from typing import List
 
 MAXINT = 2**31 - 1
 LOGGING_ENABLED = False
+
+def get_card_by_name(name):
+    for subclass in Card.__subclasses__():
+        if subclass.name == name:
+            return subclass
+    return None
 class Cards(list):
     def __init__(self, cards=None, randseed=None):
         super().__init__()
@@ -24,17 +30,13 @@ class Cards(list):
             self.extend(cards)
 
     def add_cards_by_name(self, cardname, quantity=1):
-        found_subclass = None
         # Find subclasses of Card that have a name that matches the card name and add each one to the deck
-        for subclass in Card.__subclasses__():
-            if subclass.name == cardname:
-                found_subclass = subclass
-                break
-        if not found_subclass:
+        card_class = get_card_by_name(cardname)
+        if not card_class:
             print ("Warning: Card not found: " + cardname)
         else:
             for i in range(int(quantity)):
-                self.append(found_subclass())
+                self.append(card_class())
 
     def shuffle(self):
         # Shuffle the deck with a fixed seed
@@ -185,7 +187,7 @@ class Player:
 
         # Run upkeep and everything for the new hand
         self.debug_log(f"Beginning turn {self.current_turn} after mulligan: " + self.short_str())
-        # Untap all mana
+        # Untap all mana sources and immediately tap them all for mana
         self.mana_pool = self.lands
         self.colorless_mana_pool = self.colorless_lands
 
@@ -280,7 +282,7 @@ class Player:
                 raise Exception(f' ERROR: Cannot activate {card}')
             else:
                 self.debug_log(f" Activate: {card}")
-                self.adjust_mana_pool(card.activation_cost, 0)
+                self.adjust_mana_pool(card.activation_cost, card.colorless_activation_cost)
                 card.activate(self)
 
     def panglacial_potential(self, additional_cost) -> bool:
@@ -537,8 +539,10 @@ class Card:
     alt_cost:int = MAXINT
     colorless_alt_cost:int = 0 # Colorless portion of the alternate cost
     activation_cost:int = MAXINT # Assume all activations are colorless
+    colorless_activation_cost:int = 0 # Colorless portion of the activation cost
     cardtype:str = 'None'
     prefer_alt:bool = False # If the alternate cost is available, don't evaluate the regular cost.  This is useful for cards like Caravan Vigil and Land Grant.
+    deck_max_quant:int = 4 # How many of these cards can we play in our deck?
 
     def __str__(self):
         return self.name
@@ -570,8 +574,7 @@ class Card:
         pass
 
     def can_activate(self, controller: Player) -> bool:
-        # HACK: Assume all activation costs are colorless (which is true at the time of this writing)
-        return controller.has_mana(self.activation_cost, self.activation_cost)
+        return controller.has_mana(self.activation_cost, self.colorless_activation_cost)
 
     def is_permanent(self) -> bool:
         return not (self.cardtype == 'Instant' or self.cardtype == 'Sorcery')
@@ -591,6 +594,7 @@ class Forest (Card):
     name = 'Forest'
     cost:int = 0
     cardtype = 'Land'
+    deck_max_quant:int = 10 # No limit on lands to play in our deck
 
     def can_play(self, controller: Player) -> bool:
         return controller.land_drops > 0
@@ -702,7 +706,7 @@ class KrosanWayfarer (Card):
     name = 'Krosan Wayfarer'
     cost:int = 1
     cardtype = 'Creature'
-    activation_cost: int = 0
+    activation_cost:int = 0
 
     def play(self, controller: Player):
         super().play(controller)
@@ -797,6 +801,7 @@ class GoblinCharbelcher(Card):
     cost:int = 4
     colorless_cost:int = 4 # Colorless portion of the cost
     activation_cost:int = 3
+    colorless_activation_cost:int = 3 # Colorless portion of the activation cost
     cardtype = 'Artifact'
 
     def __init__(self):
@@ -829,6 +834,7 @@ class ElvishMystic (Card):
     name = 'Elvish Mystic'
     cost:int = 1
     cardtype = 'Creature'
+    deck_max_quant:int = 8 # Because Llanowar Elves is functionally a copy of Elvish Mystic, we can set this playable number to 8 and not include Llanowar Elves in the permutation set.
 
     def __init__(self):
         self.is_tapped = True
@@ -845,6 +851,7 @@ class LlanowarElves (Card):
     name = 'Llanowar Elves'
     cost:int = 1
     cardtype = 'Creature'
+    deck_max_quant:int = 0 # Turn off this card for now
 
     def __init__(self):
         self.is_tapped = True
@@ -1219,6 +1226,7 @@ class PanglacialWurm(Card):
     colorless_cost:int = 5 # Colorless portion of the cost is 5
     activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
+    deck_max_quant:int = 1 # Never play more than one of these cards
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -1246,8 +1254,14 @@ class SolRing(Card):
     name = 'Sol Ring'
     cost:int = 1
     colorless_cost:int = 1 # Colorless portion of the cost
-    activation_cost:int = 0 # Costs nothing to activate
+    # activation_cost:int = 0 # Costs nothing to activate
     cardtype = 'Artifact'
+    deck_max_quant:int = 1 # Restricted in Vintage, so can only play 1
+
+    # Don't permit special activation -- just add 2 to our colorless land count when activated
+    def can_activate(self, controller: Player) -> bool:
+        #print(f' Checking if we can activate Sol Ring...')
+        return False
 
     def play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
@@ -1258,28 +1272,42 @@ class SolRing(Card):
 # Simian Spirit Guide is a creature that you may exile from your hand to add 1 red (colorless) mana to your mana pool.
 class SimianSpiritGuide(Card):
     name = 'Simian Spirit Guide'
-    cost:int = 0
+    alt_cost:int = 0
+    cost:int = 3 # Note that this is not castable with green, but doing it this way so that it shows up correctly in CMC lists
+    colorless_cost:int = 2 # Colorless portion of the cost
     cardtype = 'Creature'
+    deck_max_quant:int = 0 # Turn off this card for now, since it's just a worse Elvish Spirit Guide. If that card sees play, then maybe bump this up again.
 
-    def play(self, controller: Player):
+    # TODO: Maybe implement this as a playable creature later, but for now, just have this as a mana source.
+    def can_play(self, controller: Player) -> bool:
+        return False
+
+    def alt_play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
+        # Note that this technically should be red mana, but count it as colorless for now.
+        # Only messes us up on spells like Manamorphose that would potentially care about red mana, but that's such an edge case we won't worry about it here.
         controller.colorless_mana_pool += 1
         # Exile it instead of adding it to the table
-        # super().play(controller)
+        # super().alt_play(controller)
         controller.exile.append(self)
-
 
 # Elvish Spirit Guide is a creature that you may exile from your hand to add 1 green mana to your mana pool.
 class ElvishSpiritGuide(Card):
     name = 'Elvish Spirit Guide'
-    cost:int = 0
+    cost:int = 3
+    colorless_cost:int = 2 # Colorless portion of the cost
+    alt_cost:int = 0
     cardtype = 'Creature'
 
-    def play(self, controller: Player):
+    # TODO: Maybe implement this as a playable creature later, but for now, just have this as a mana source.
+    def can_play(self, controller: Player) -> bool:
+        return False
+
+    def alt_play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
         controller.mana_pool += 1
         # Exile it instead of adding it to the table
-        # super().play(controller)
+        # super().alt_play(controller)
         controller.exile.append(self)
 
 # Beneath the Sands is a sorcery that costs 3 and says: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle.  Cycling 2 (2, Discard this card: Draw a card)
@@ -1390,6 +1418,7 @@ class GenerousEnt(Card):
     colorless_cost:int = 5 # Colorless portion of the cost
     alt_cost:int = 1 # (Forestcycling)
     colorless_alt_cost:int = 1 # Colorless portion of the alternate cost
+    activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
 
     def __init__(self):
@@ -1468,6 +1497,7 @@ class BeanstalkGiant(Card):
     colorless_cost:int = 6 # Colorless portion of the cost
     alt_cost:int = 3 # (Adventure)
     colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
+    activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
 
     def __init__(self):
@@ -1505,10 +1535,8 @@ class BeanstalkGiant(Card):
         controller.table.extend(cards)
         controller.lands += 1
         controller.mana_pool += 1 # The land comes into play untapped, so immediately add it to the mana pool.
-        super().alt_play(controller)
-        # Remove ourselves from the graveyard, add ourselves back to the hand, but mark us as having gone on an adventure, so cannot be alt-played again.
-        controller.graveyard.remove(self)
-        controller.hand.append(self)
+        # Don't add ourselves to the table, but keep this card in the hand -- though mark us as having gone on an adventure, so cannot be alt-played again.
+        #super().alt_play(controller)
         self.has_gone_on_an_adventure = True
 
 # Grow from the Ashes is a sorcery that costs 3 and says: Kicker 2 (You may pay an additional 2 as you cast this spell.) Search your library for a basic land card, put it onto the battlefield, then shuffle. If this spell was kicked, instead search your library for two basic land cards, put them onto the battlefield, then shuffle.
@@ -1530,10 +1558,10 @@ class GrowFromTheAshes(Card):
         return super().can_alt_play(controller) and (controller.deck.count_cards('Forest') > 1)
     
     def play(self, controller: Player):
-        self.do_effect(1)
+        self.do_effect(controller, 1)
 
     def alt_play(self, controller: Player):
-        self.do_effect(2)
+        self.do_effect(controller, 2)
 
     def do_effect(self, controller: Player, search_count:int):
         cards = controller.deck.find_and_remove('Forest', search_count)
@@ -1588,6 +1616,7 @@ class TangledFlorahedron(Card):
     cost:int = 2
     colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Creature'
+    alt_cost:int = 0
 
     def __init__(self):
         self.is_tapped = True
