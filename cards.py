@@ -1288,7 +1288,7 @@ class BeneathTheSands(Card):
     cost:int = 3
     colorless_cost:int = 2 # Colorless portion of the cost
     alt_cost:int = 2 # (Cycling)
-    colorless_alt_cost = 2 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -1317,7 +1317,7 @@ class MigrationPath(Card):
     cost:int = 4
     colorless_cost:int = 3 # Colorless portion of the cost
     alt_cost:int = 2 # (Cycling)
-    colorless_alt_cost = 2 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -1347,7 +1347,7 @@ class EdgeOfAutumn(Card):
     cost:int = 2
     colorless_cost:int = 1 # Colorless portion of the cost
     alt_cost:int = 0 # (Cycling)
-    colorless_alt_cost = 0 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 0 # Colorless portion of the alternate cost
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -1389,7 +1389,7 @@ class GenerousEnt(Card):
     cost:int = 6
     colorless_cost:int = 5 # Colorless portion of the cost
     alt_cost:int = 1 # (Forestcycling)
-    colorless_alt_cost = 1 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 1 # Colorless portion of the alternate cost
     cardtype = 'Creature'
 
     def __init__(self):
@@ -1467,7 +1467,7 @@ class BeanstalkGiant(Card):
     cost:int = 7
     colorless_cost:int = 6 # Colorless portion of the cost
     alt_cost:int = 3 # (Adventure)
-    colorless_alt_cost = 2 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
     cardtype = 'Creature'
 
     def __init__(self):
@@ -1517,7 +1517,7 @@ class GrowFromTheAshes(Card):
     cost:int = 3
     colorless_cost:int = 2 # Colorless portion of the cost
     alt_cost:int = 5 # (Cast w/ kicker)
-    colorless_alt_cost = 4 # Colorless portion of the alternate cost
+    colorless_alt_cost:int = 4 # Colorless portion of the alternate cost
     cardtype = 'Sorcery'
 
     def __init__(self):
@@ -1549,6 +1549,7 @@ class GrowFromTheAshes(Card):
 
 # Nissa's Triumph is a sorcery that costs 2 and says: Search your library for up to two basic Forest cards. If you control a Nissa planeswalker, instead search your library for up to three land cards. Reveal those cards, put them into your hand, then shuffle.
 # NOTE: We will not implement the Nissa planeswalker check, as we are not currently implementing planeswalkers.
+# NOTE: Seek the Horizon is functionally similar to Nissa's Triump, exccept for a cost of 4 instead of 2, but lets the player search for an additional land. We will not be implementing this one unless Nissa's Triumph sees play.
 class NissasTriumph(Card):
     name = 'Nissa\'s Triumph'
     cost:int = 2
@@ -1566,4 +1567,50 @@ class NissasTriumph(Card):
         controller.check_panglacial()
         controller.hand.extend(cards)
         super().play(controller)
+
+# Manamorphose is an instant that costs 2 and says: Add two mana in any combination of colors. Draw a card.
+class Manamorphose(Card):
+    name = 'Manamorphose'
+    cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
+    cardtype = 'Instant'
+
+    def play(self, controller: Player):
+        # Add two mana in any combination of colors
+        controller.mana_pool += 2
+        # Draw a card
+        controller.draw()
+        super().play(controller)
+
+# Tangled Florahedron/Tangled Vale is a DFC that, on the front face, is a creature that costs 2 and says: T: Add G.  On the back face, it is a land that enters the battlefield tapped.
+class TangledFlorahedron(Card):
+    name = 'Tangled Florahedron'
+    cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
+    cardtype = 'Creature'
+
+    def __init__(self):
+        self.is_tapped = True
+        pass
+
+    def play(self, controller: Player):
+        # Instead of activating to add mana to our mana pool, just treat it as a new land so we don't have as many branching permutations.
+        controller.lands += 1
+        super().play(controller)
+
+    # Alt play is playing it as a tapped land on its backside
+    def can_alt_play(self, controller: Player) -> bool:
+        return controller.land_drops > 0
+
+    def alt_play(self, controller: Player):
+        controller.lands += 1
+        # This comes in tapped, so we can't immediately add it to our mana_pool
+        controller.land_drops -= 1
+        # Change the name and cardtype to the backside
+        self.cardtype = 'Land'
+        super().alt_play(controller)
+        # Adjust the name after play so that it shows up in the log correctly
+        self.name = 'Tangled Vale'
+
+
 
