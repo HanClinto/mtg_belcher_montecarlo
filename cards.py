@@ -417,8 +417,17 @@ class Player:
                 # Get a list of every unique card name in the hand
                 unique_hand_cards = []
                 for card in self.hand:
-                    if card not in unique_hand_cards:
+                    if card not in unique_hand_cards and not card.skip_playing_this_turn:
                         unique_hand_cards.append(card)
+
+                # For every card, if it is flagged to consider not playing it, then create a branch where we don't play it.
+                for card_idx, card in enumerate(self.hand):
+                    # TODO: Fix this
+                    if False and card.consider_not_playing and not card.skip_playing_this_turn:
+                        copy = self.copy()
+                        copy_card = copy.hand[card_idx]
+                        copy_card.skip_playing_this_turn = True
+                        next_states.append(copy)
 
                 # For every unique card, if we can play that card, then play it.  Don't branch more than once for each card name.
                 for card in unique_hand_cards:
@@ -543,6 +552,8 @@ class Card:
     cardtype:str = 'None'
     prefer_alt:bool = False # If the alternate cost is available, don't evaluate the regular cost.  This is useful for cards like Caravan Vigil and Land Grant.
     deck_max_quant:int = 4 # How many of these cards can we play in our deck?
+    consider_not_playing:bool = False # Set to True if this is a card that we can potentially gain advantage by saving to a future turn -- even if we can play it. Example would be cards that add mana, like Elvish Spirit Guide.
+    skip_playing_this_turn:bool = False # Flag to mark when this card should be skipped and saved for a future turn
 
     def __str__(self):
         return self.name
@@ -580,6 +591,8 @@ class Card:
         return not (self.cardtype == 'Instant' or self.cardtype == 'Sorcery')
 
     def do_upkeep(self, controller: Player):
+        # Reset our skip-playing flag so that we always consider each card fresh on each turn
+        self.skip_playing_this_turn = False
         pass
 
 # Forest is a card that costs 0 and has an ability that increases a player's land count by 1
@@ -627,8 +640,9 @@ class CaravanVigil (Card):
     cost:int = 1
     alt_cost:int = 1
     cardtype = 'Sorcery'
-    prefer_alt = True
-
+    prefer_alt:bool = True
+    consider_not_playing:bool = True # If we have Sakura-Tribe Elder, then we can get a big benefit by holding onto this card until Morbid is active.
+    
     def __init__(self):
         self.mana_value = 1
         pass
@@ -697,9 +711,9 @@ class ArborealGrazer (Card):
         controller.table.extend(cards)
         controller.lands += len(cards)
 
-    # Only let us play this card if we have at least 1 Forest in hand.
+    # Only let us play this card if we have more forests in hand than land drops
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.hand.count_cards('Forest') > 0
+        return super().can_play(controller) and controller.hand.count_cards('Forest') > controller.land_drops
 
 # Krosan Wayfarer is a creature that costs 1 that says "Sacrifice Krosan Wayfarer: You may put a land card from your hand onto the battlefield."
 class KrosanWayfarer (Card):
@@ -717,7 +731,7 @@ class KrosanWayfarer (Card):
     def can_activate(self, controller: Player) -> bool:
         return (super().can_activate(controller) 
             and self in controller.table 
-            and controller.hand.count_cards('Forest') > 0)
+            and controller.hand.count_cards('Forest') > controller.land_drops)
 
     def activate(self, controller: Player):
         super().activate(controller)
@@ -869,6 +883,7 @@ class ArborElf (Card):
     cardtype = 'Creature'
 
     def play(self, controller: Player):
+        # Represent summoning sickness by coming into play tapped.
         self.is_tapped = True
         super().play(controller)
 
@@ -876,11 +891,12 @@ class ArborElf (Card):
         return not self.is_tapped and self in controller.table and controller.table.count_cards('Forest') > 0
 
     def activate(self, controller: Player):
-        # If we have a Wild Growth in play, add 2 mana instead of 1
-        if controller.table.count_cards('Wild Growth') > 0:
-            controller.mana_pool += 2
-        elif controller.table.count_cards('Forest') > 0:
-            controller.mana_pool += 1
+        numWildGrowth = controller.table.count_cards('Wild Growth')
+
+        # If we have Wild Growth in play, assume they're all on the same land, so untap them all at the same time. H.T. bakeraj4 for the change!
+
+        if controller.table.count_cards('Forest') > 0:
+            controller.mana_pool += numWildGrowth
         else:
             controller.mana_pool += 0
         self.is_tapped = True
@@ -1139,7 +1155,8 @@ class RecrossThePaths(Card):
         controller.deck.put_on_bottom(remaining_cards)
         # TODO: Clash with an opponent. If you win, return Recross the Paths to its owner's hand.
         # Pretend that we always win the clash.
-        controller.hand.append(self)
+        # NOTE Don't need to re-append this to our hand, since it's already in here, and we haven't called super.play() to auto-add it to the graveyard
+        # controller.hand.append(self)
         # TODO: Make this a random chance?
 
 # Ancient Stirrings is a sorcery that costs 1 and says: Look at the top five cards of your library. You may reveal a colorless card from among them and put it into your hand. Then put the rest on the bottom of your library in any order.
@@ -1276,6 +1293,7 @@ class SimianSpiritGuide(Card):
     cost:int = 3 # Note that this is not castable with green, but doing it this way so that it shows up correctly in CMC lists
     colorless_cost:int = 2 # Colorless portion of the cost
     cardtype = 'Creature'
+    consider_not_playing:bool = True # This is a card that we should consider not playing immediately in case we want to save the mana for later.
     deck_max_quant:int = 0 # Turn off this card for now, since it's just a worse Elvish Spirit Guide. If that card sees play, then maybe bump this up again.
 
     # TODO: Maybe implement this as a playable creature later, but for now, just have this as a mana source.
@@ -1298,10 +1316,15 @@ class ElvishSpiritGuide(Card):
     colorless_cost:int = 2 # Colorless portion of the cost
     alt_cost:int = 0
     cardtype = 'Creature'
+    consider_not_playing:bool = True # This is a card that we should consider not playing immediately in case we want to save the mana for later.
 
     # TODO: Maybe implement this as a playable creature later, but for now, just have this as a mana source.
     def can_play(self, controller: Player) -> bool:
         return False
+    
+    def can_alt_play(self, controller: Player) -> bool:
+        # TODO: Only consider playing this card if we have other cards in our hand that might need the mana
+        return True
 
     def alt_play(self, controller: Player):
         # Instead of activating this, just add to our mana pool directly.
@@ -1577,7 +1600,7 @@ class GrowFromTheAshes(Card):
 
 # Nissa's Triumph is a sorcery that costs 2 and says: Search your library for up to two basic Forest cards. If you control a Nissa planeswalker, instead search your library for up to three land cards. Reveal those cards, put them into your hand, then shuffle.
 # NOTE: We will not implement the Nissa planeswalker check, as we are not currently implementing planeswalkers.
-# NOTE: Seek the Horizon is functionally similar to Nissa's Triump, exccept for a cost of 4 instead of 2, but lets the player search for an additional land. We will not be implementing this one unless Nissa's Triumph sees play.
+# NOTE: Seek the Horizon is functionally similar to Nissa's Triump, except for a cost of 4 instead of 2, but lets the player search for an additional land. We will not be implementing this one unless Nissa's Triumph sees play.
 class NissasTriumph(Card):
     name = 'Nissa\'s Triumph'
     cost:int = 2
@@ -1641,5 +1664,40 @@ class TangledFlorahedron(Card):
         # Adjust the name after play so that it shows up in the log correctly
         self.name = 'Tangled Vale'
 
+# Journey of Discovery is a sorcery that costs 3 and says: Choose one — Search your library for up to two basic land cards, reveal them, put them into your hand, then shuffle; or you may play up to two additional lands this turn. Entwine 2G (Choose both if you pay the entwine cost.)
+class JourneyOfDiscovery(Card):
+    name = 'Journey of Discovery'
+    cost:int = 3 # Search for lands
+    colorless_cost:int = 2 # Colorless portion of the cost
+    alt_cost:int = 3 # Additional land drops
+    colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
+    #activation_cost:int = 6 # We're going to count Entwine as the activation
+    #colorless_activation_cost:int = 4 # Colorless portion of the activation
+    cardtype = 'Sorcery'
 
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+
+    # Check to see if the number of lands we have in our hand is greater than the number of land drops we have remaining
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and controller.hand.count_cards('Forest') > controller.land_drops
+
+    def play(self, controller: Player):
+        cards = controller.deck.find_and_remove('Forest', 2)
+        controller.check_panglacial()
+        controller.hand.extend(cards)
+        super().play(controller)
+
+    def alt_play(self, controller: Player):
+        controller.land_drops += 2
+        super().alt_play(controller)
+
+    # TODO: See if we can implement the entwine cost as an activation cost -- need to modify things so that we can activate this card from the hand
+    #def can_activate(self, controller: Player) -> bool:
+    #    return super().can_activate(controller) and controller.mana_pool >= self.activation_cost
+
+# TODO: Consider Lotus Cobra as a way to ramp mana when we're adding lots of lands to the battlefield
 
