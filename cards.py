@@ -1294,7 +1294,6 @@ class SimianSpiritGuide(Card):
     colorless_cost:int = 2 # Colorless portion of the cost
     cardtype = 'Creature'
     consider_not_playing:bool = True # This is a card that we should consider not playing immediately in case we want to save the mana for later.
-    deck_max_quant:int = 0 # Turn off this card for now, since it's just a worse Elvish Spirit Guide. If that card sees play, then maybe bump this up again.
 
     # TODO: Maybe implement this as a playable creature later, but for now, just have this as a mana source.
     def can_play(self, controller: Player) -> bool:
@@ -1306,7 +1305,7 @@ class SimianSpiritGuide(Card):
         # Only messes us up on spells like Manamorphose that would potentially care about red mana, but that's such an edge case we won't worry about it here.
         controller.colorless_mana_pool += 1
         # Exile it instead of adding it to the table
-        # super().alt_play(controller)
+        #super().alt_play(controller)
         controller.exile.append(self)
 
 # Elvish Spirit Guide is a creature that you may exile from your hand to add 1 green mana to your mana pool.
