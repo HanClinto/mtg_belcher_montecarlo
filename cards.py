@@ -113,7 +113,7 @@ class Cards(list):
         count = 0
         peek_cnt = 0
         for card in reversed(self):
-            if card.name == name:
+            if card.name == name or card.cardtype == name:
                 count += 1
             peek_cnt += 1
             if in_top == peek_cnt:
@@ -971,8 +971,8 @@ class NissasPilgrimage(Card):
         super().alt_play(controller)
 
 # Wall of Roots is a card that costs 2 and has an ability that increases a player's mana pool by 1
-# NOTE: This is a bit of a hack.  For now we're going to treat this as a land enters untapped, but doesn't remove a Forest from the deck.
-#  so we don't have to deal with the branching permutations of activating it.
+# NOTE: This is a bit of a hack.  For now we're going to treat this as a land that enters untapped, but doesn't remove a Forest from the deck.
+#  This lets us not have to deal with the branching permutations of activating it, and very rarely would a game go long enough that we could ever kill it off from 5 activations.
 # If the AI starts to over-value Wall of Roots, consider restoring the prior implementation (saved for reference)
 class WallOfRoots (Card):
     name = 'Wall of Roots'
@@ -1073,13 +1073,13 @@ class WildGrowth(Card):
 
     # Only allow this card to be played if the table contains a Forest
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and controller.table.count_cards('Forest') > 0
+        return super().can_play(controller) and controller.table.count_cards('Land') > 0
 
     def play(self, controller: Player):
         controller.lands += 1 # Simulate effect by just adding an additional land
-        # If there is at least one unused mana when this is played, then add 1 to the mana pool, implying that we played this against an untapped land.
+        # If there is at least one unused green mana when this is played, then add 1 to the mana pool, implying that we played this against an untapped land.
         #  Note: This isn't perfect, but it's probably good 'nuff.
-        if controller.mana_pool > 0 and controller.lands > 0:
+        if controller.mana_pool > 0:
             controller.mana_pool += 1
         super().play(controller)
 
