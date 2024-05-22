@@ -554,6 +554,8 @@ class Card:
     deck_max_quant:int = 4 # How many of these cards can we play in our deck?
     consider_not_playing:bool = False # Set to True if this is a card that we can potentially gain advantage by saving to a future turn -- even if we can play it. Example would be cards that add mana, like Elvish Spirit Guide.
     skip_playing_this_turn:bool = False # Flag to mark when this card should be skipped and saved for a future turn
+    power:int = None
+    toughness:int = None
 
     def __str__(self):
         return self.name
@@ -648,7 +650,8 @@ class CaravanVigil (Card):
         pass
 
     def can_play(self, controller: Player) -> bool:
-        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+        # NOTE: If there is a Sakura-Tribe Elder on the battlefield or morbid is active, then don't play this card the regular way -- wait for the better one.
+        return super().can_play(controller) and (controller.table.count_cards('Sakura-Tribe Elder') == 0) and (not controller.creature_died_this_turn) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     def play(self, controller: Player):
         cards = controller.deck.find_and_remove('Forest', 1)
@@ -676,6 +679,8 @@ class SakuraTribeElder (Card):
     colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Creature'
     activation_cost:int = 0
+    power:int = 1
+    toughness:int = 1
 
     def can_activate(self, controller: Player) -> bool:
         return (self in controller.table
@@ -703,6 +708,8 @@ class ArborealGrazer (Card):
     name = 'Arboreal Grazer'
     cost:int = 1
     cardtype = 'Creature'
+    power:int = 0
+    toughness:int = 3
 
     def play(self, controller: Player):
         super().play(controller)
@@ -721,6 +728,8 @@ class KrosanWayfarer (Card):
     cost:int = 1
     cardtype = 'Creature'
     activation_cost:int = 0
+    power:int = 1
+    toughness:int = 1
 
     def play(self, controller: Player):
         super().play(controller)
@@ -743,6 +752,38 @@ class KrosanWayfarer (Card):
         # Immediately sacrifice this
         controller.table.remove(self)
         controller.graveyard.append(self)
+
+# Skyshroud Ranger is a creature that costs 1 that says "T: You may put a land card from your hand onto the battlefield. Activate only as a sorcery."
+# Sakura-Tribe Scout is a near-identical card.
+# NOTE: If this card sees play, then can also add the 2-mana big brothers, Scaled Herbalist, Llanowar Scout, and .
+class SkyshroudRanger (Card):
+    name = 'Skyshroud Ranger'
+    cost:int = 1
+    cardtype = 'Creature'
+    activation_cost:int = 0
+    power:int = 1
+    toughness:int = 1
+    deck_max_quant:int = 8 # Because Sakura-Tribe Scout is a functional duplicate, we can play 8 of these in our deck.
+
+    def __init__(self):
+        self.is_tapped = False
+
+    def play(self, controller: Player):
+        # Mark ourselves as tapped to represent summoning sickness
+        self.is_tapped = True
+        super().play(controller)
+
+    def can_activate(self, controller: Player) -> bool:
+        return (controller.hand.count_cards('Forest') > 0
+            and not self.is_tapped
+            and super().can_activate(controller))
+
+    def activate(self, controller: Player):
+        # Put a land into play untapped
+        cards = controller.hand.find_and_remove('Forest', 1)
+        controller.table.extend(cards)
+        controller.lands += len(cards)
+        controller.mana_pool += len(cards)
 
 # Reclaim the Wastes is a card that costs 1 and when played, searches the deck for a land and puts it into the player's hand.
 #  It has an alternate cost of 4 that searches for 2 lands instead.
@@ -849,6 +890,8 @@ class ElvishMystic (Card):
     cost:int = 1
     cardtype = 'Creature'
     deck_max_quant:int = 8 # Because Llanowar Elves is functionally a copy of Elvish Mystic, we can set this playable number to 8 and not include Llanowar Elves in the permutation set.
+    power:int = 1
+    toughness:int = 1
 
     def __init__(self):
         self.is_tapped = True
@@ -866,6 +909,8 @@ class LlanowarElves (Card):
     cost:int = 1
     cardtype = 'Creature'
     deck_max_quant:int = 0 # Turn off this card for now
+    power:int = 1
+    toughness:int = 1
 
     def __init__(self):
         self.is_tapped = True
@@ -881,6 +926,8 @@ class ArborElf (Card):
     name = 'Arbor Elf'
     cost:int = 1
     cardtype = 'Creature'
+    power:int = 1
+    toughness:int = 1
 
     def play(self, controller: Player):
         # Represent summoning sickness by coming into play tapped.
@@ -979,6 +1026,8 @@ class WallOfRoots (Card):
     cost:int = 2
     colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Creature'
+    power:int = 0
+    toughness:int = 5
 
     def play(self, controller: Player):
         controller.lands += 1
@@ -1037,6 +1086,8 @@ class ChancellorOfTheTangle(Card):
     colorless_cost:int = 4 # Colorless portion of the cost
     cardtype = 'Creature'
     activation_cost:int = 0 # Costs nothing to attack
+    power:int = 6
+    toughness:int = 7
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -1236,7 +1287,7 @@ class AbundantHarvest(Card):
         self.do_harvest(controller, False)
         super().alt_play(controller)
 
-# Panglacial Wurm is a creature that costs 7 and says: Trample. While you're searching your library, you may cast Panglacial Wurm from your library.
+# Panglacial Wurm is a 9/5 creature that costs 7 and says: Trample. While you're searching your library, you may cast Panglacial Wurm from your library.
 class PanglacialWurm(Card):
     name = 'Panglacial Wurm'
     cost:int = 7
@@ -1244,6 +1295,8 @@ class PanglacialWurm(Card):
     activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
     deck_max_quant:int = 1 # Never play more than one of these cards
+    power:int = 9
+    toughness:int = 5
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -1442,6 +1495,8 @@ class GenerousEnt(Card):
     colorless_alt_cost:int = 1 # Colorless portion of the alternate cost
     activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
+    power:int = 5
+    toughness:int = 7
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -1521,6 +1576,8 @@ class BeanstalkGiant(Card):
     colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
     activation_cost:int = 0 # Costs nothing to attack
     cardtype = 'Creature'
+    power:int = 6 # HACK: Instead of actually calculating our power and updating this variable, just set it to 6 for now.
+    toughness:int = 6 # HACK: Instead of actually calculating our toughness and updating this variable, just set it to 6 for now.
 
     def __init__(self):
         self.is_tapped:bool = False
@@ -1639,6 +1696,8 @@ class TangledFlorahedron(Card):
     colorless_cost:int = 1 # Colorless portion of the cost
     cardtype = 'Creature'
     alt_cost:int = 0
+    power:int = 1
+    toughness:int = 1
 
     def __init__(self):
         self.is_tapped = True
@@ -1662,6 +1721,59 @@ class TangledFlorahedron(Card):
         super().alt_play(controller)
         # Adjust the name after play so that it shows up in the log correctly
         self.name = 'Tangled Vale'
+
+# Disciple of Freyalise is a DFC Creature // Land that is 3/3, costs 3GGG and says: When Disciple of Freyalise enters the battlefield, you may sacrifice another creature. If you do, you gain X life and draw X cards, where X is that creature’s power.
+# On the back face, it is a Land that says: As Garden of Freyalise enters the battlefield, you may pay 3 life. If you don’t, it enters the battlefield tapped.
+class DiscipleOfFreyalise(Card):
+    name = 'Disciple of Freyalise'
+    cost:int = 6
+    colorless_cost:int = 3 # Colorless portion of the cost
+    cardtype = 'Creature'
+    alt_cost:int = 0
+    power:int = 3
+    toughness:int = 3
+    deck_max_quant:int = 0 # Turn off this card for now because it doesn't release until Modern Masters 3
+
+    def __init__(self):
+        self.is_tapped = True
+        pass
+
+    def play(self, controller: Player):
+        # Find the creature with the highest power and sacrifice it
+        highest_power = 0
+        highest_power_creature = None
+        for card in controller.table:
+            if card.cardtype == 'Creature' and card.power > highest_power:
+                highest_power = card.power
+                highest_power_creature = card
+
+        if highest_power_creature is not None:
+            controller.table.remove(highest_power_creature)
+            controller.graveyard.append(highest_power_creature)
+            controller.life_total += highest_power
+            controller.draw(highest_power)
+        
+        super().play(controller)
+
+    # Alt play is playing it as a land on its backside
+    def can_alt_play(self, controller: Player) -> bool:
+        return controller.land_drops > 0
+
+    def alt_play(self, controller: Player):
+        controller.lands += 1
+        controller.land_drops -= 1
+        
+        # If we have the life available, then we can play this untapped
+        if controller.life_total > 3:
+            controller.life_total -= 3
+            controller.mana_pool += 1
+
+        # This comes in tapped, so we can't immediately add it to our mana_pool
+        # Change the name and cardtype to the backside
+        self.cardtype = 'Land'
+        super().alt_play(controller)
+        # Adjust the name after play so that it shows up in the log correctly
+        self.name = 'Garden of Freyalise'
 
 # Journey of Discovery is a sorcery that costs 3 and says: Choose one — Search your library for up to two basic land cards, reveal them, put them into your hand, then shuffle; or you may play up to two additional lands this turn. Entwine 2G (Choose both if you pay the entwine cost.)
 class JourneyOfDiscovery(Card):

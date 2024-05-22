@@ -24,7 +24,7 @@ For those interested in the raw data output, there are some [preliminary results
 
 For starters, here's a graph showing how our average win turn declines over time.
 
-![Graph: Average Win Turn](data/results_avgwinturn_1to101.png "Graph: Average Win Turn")
+![Graph: Average Win Turn](docs/results_avgwinturn_1to101.png "Graph: Average Win Turn")
 
 Nice! In 10 hours of learning, we speed up our average win by nearly a full turn!
 
@@ -34,11 +34,11 @@ That said, let's see what changes were made at each step in order to do that.
 
 This is a graph of the entire 60-card deck and how the cards change in it over time.
 
-![Graph: Deck Evolution](data/results_decklist_1to101.png "Graph: Deck Evolution")
+![Graph: Deck Evolution](docs/results_decklist_1to101.png "Graph: Deck Evolution")
 
 Let's add some arrows so you can more easily understand what each of the blobs correspond to. The taller the blob, the more of that card are in the decklist. Most cards are limited to 4, but some are limited to 1 (Sol Ring), and some are unlimited (Forest).
 
-![Graph: Deck Evolution w/ Annotations](data/results_decklist_1to101_annotated.png "Graph: Deck Evolution w/ Annotations")
+![Graph: Deck Evolution w/ Annotations](docs/results_decklist_1to101_annotated.png "Graph: Deck Evolution w/ Annotations")
 
 ## What We Learn about What It Learns (initial results)
 
