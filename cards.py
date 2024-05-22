@@ -769,14 +769,14 @@ class SkyshroudRanger (Card):
         self.is_tapped = False
 
     def play(self, controller: Player):
-        # Mark ourselves as tapped to represent summoning sickness
+        # Represent summoning sickness by coming into play tapped.
         self.is_tapped = True
         super().play(controller)
 
     def can_activate(self, controller: Player) -> bool:
-        return (controller.hand.count_cards('Forest') > 0
-            and not self.is_tapped
-            and super().can_activate(controller))
+        return (not self.is_tapped 
+            and controller.hand.count_cards('Forest') > 0
+            and self in controller.table)
 
     def activate(self, controller: Player):
         # Put a land into play untapped
@@ -784,6 +784,8 @@ class SkyshroudRanger (Card):
         controller.table.extend(cards)
         controller.lands += len(cards)
         controller.mana_pool += len(cards)
+
+        self.is_tapped = True
 
 # Reclaim the Wastes is a card that costs 1 and when played, searches the deck for a land and puts it into the player's hand.
 #  It has an alternate cost of 4 that searches for 2 lands instead.
@@ -935,17 +937,18 @@ class ArborElf (Card):
         super().play(controller)
 
     def can_activate(self, controller: Player) -> bool:
-        return not self.is_tapped and self in controller.table and controller.table.count_cards('Forest') > 0
+        return (not self.is_tapped 
+            and self in controller.table 
+            and controller.table.count_cards('Forest') > 0)
 
     def activate(self, controller: Player):
+        # If we have Wild Growth in play, assume they're all on the same land, so untap them all at the same time. H.T. bakeraj4 for the change!
         numWildGrowth = controller.table.count_cards('Wild Growth')
 
-        # If we have Wild Growth in play, assume they're all on the same land, so untap them all at the same time. H.T. bakeraj4 for the change!
-
+        # Can only add mana if there is at least one land in play
         if controller.table.count_cards('Forest') > 0:
-            controller.mana_pool += numWildGrowth
-        else:
-            controller.mana_pool += 0
+            controller.mana_pool += 1 + numWildGrowth
+
         self.is_tapped = True
 
 # Rampant Growth is a card with an ability: Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.
