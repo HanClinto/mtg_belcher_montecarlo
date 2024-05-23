@@ -135,6 +135,7 @@ class Cards(list):
             for c in self:
                 if c.name == card:
                     return c
+            #print(f'Unable to find card "{card}"')
             return None
         else:
             return card
@@ -146,8 +147,11 @@ class Player:
     colorless_lands:int = 0
     mana_pool:int = 0
     colorless_mana_pool:int = 0
+    persistent_mana_pool:int = 0 # This is mana that is from on-demand sources like Elvish Spirit Guide, and Lotus Petal. Don't spend it except as a last resort.
+    persistent_colorless_mana_pool:int = 0 # This is non-green mana that is from on-demand sources Simian Spirit Guide. Don't spend it except as a last resort, but spend it before regular persistent mana.
     current_turn:int = 0
     creature_died_this_turn:bool = False
+    life_total:int = 20
     opponent_lifetotal:int = 20
     is_pruned:bool = False # Marks a player state as pruned, meaning that it should not be evaluated for exhaustive search anymore.
     pickledump = None
@@ -203,20 +207,69 @@ class Player:
         for card in self.exile:
             card.do_upkeep(self)        
 
-    def has_mana(self, cost, colorless_cost=0):
-        colored_cost = cost - colorless_cost
-        return ((self.mana_pool + self.colorless_mana_pool >= cost) and 
-            (self.mana_pool >= colored_cost))
+    def has_mana(self, total_cost, colorless_cost=0):
+        colored_cost = total_cost - colorless_cost
 
-    def adjust_mana_pool(self, cost, colorless_cost=0):
-        colorless_usage = 0
-        if self.colorless_mana_pool > 0 and colorless_cost > 0:
-            colorless_usage = min(self.colorless_mana_pool, colorless_cost)
-            self.colorless_mana_pool -= colorless_usage
-        self.mana_pool -= (cost - colorless_usage)
+        colored_mana_available = self.mana_pool + self.persistent_mana_pool
+        colorless_mana_available = self.colorless_mana_pool + self.persistent_colorless_mana_pool
 
+        return (colored_cost <= colored_mana_available
+            and total_cost <= colored_mana_available + colorless_mana_available)
+
+    def adjust_mana_pool(self, total_cost, colorless_cost=0):
+        starting_total_mana = self.mana_pool + self.colorless_mana_pool + self.persistent_mana_pool + self.persistent_colorless_mana_pool
+        remaining_colored_cost = total_cost - colorless_cost
+        remaining_colorless_cost = colorless_cost
+
+        ### Stage 1: Colorless costs
+        ## 1) Spend temporary colorless mana on our colorless costs first
+        ## 2) Spend spare temporary colored mana on our remaining colorless costs next
+        ## 3) Spend persistent colorless mana on our remaining colorless costs last
+
+        ### Stage 2: Colored costs
+        ## 1) Spend temporary colored mana on our colored costs first
+        ## 2) Spend persistent colored mana on our remaining colored costs last
+
+        ### Stage 1: Colorless costs
+        ## Step 1.1) Spend temporary colorless mana on our colorless costs first
+        colorless_usage = min(self.colorless_mana_pool, colorless_cost)
+        self.colorless_mana_pool -= colorless_usage
+        remaining_colorless_cost -= colorless_usage
+
+        # Calculate how much extra colored mana do we have to spend
+        spare_colored_mana = self.mana_pool - remaining_colored_cost
+
+        ## Step 2.2) Spend spare temporary colored mana on our remaining colorless costs next
+        if spare_colored_mana >= 0:
+            colorless_usage = min(spare_colored_mana, remaining_colorless_cost)
+            self.mana_pool -= colorless_usage
+            remaining_colorless_cost -= colorless_usage
+
+        ## Step 2.3) Spend persistent colorless mana on our remaining colorless costs last
+        colorless_usage = min(self.persistent_colorless_mana_pool, remaining_colorless_cost)
+        self.persistent_colorless_mana_pool -= colorless_usage
+        remaining_colorless_cost -= colorless_usage
+
+        ### Stage 2: Colored costs
+        ## Step 1.1) Spend temporary colored mana on our colored costs first
+        colored_usage = min(self.mana_pool, remaining_colored_cost)
+        self.mana_pool -= colored_usage
+        remaining_colored_cost -= colored_usage
+
+        ## Step 2.2) Spend persistent colored mana on our remaining colored costs last
+        colored_usage = min(self.persistent_mana_pool, remaining_colored_cost)
+        self.persistent_mana_pool -= colored_usage
+        remaining_colored_cost -= colored_usage
+
+        # Check that we haven't overspent
         assert self.mana_pool >= 0
         assert self.colorless_mana_pool >= 0
+        assert self.persistent_mana_pool >= 0
+        assert self.persistent_colorless_mana_pool >= 0
+
+        # Ensure that we spent the proper amount
+        ending_total_mana = self.mana_pool + self.colorless_mana_pool + self.persistent_mana_pool + self.persistent_colorless_mana_pool
+        assert starting_total_mana - total_cost == ending_total_mana
 
     def can_play(self, card) -> bool:
         card = self.hand.get_card(card)
@@ -299,6 +352,22 @@ class Player:
     def has_spellmastery(self):
         # If there are two or more instant and sorcery cards in your graveyard, you have spellmastery
         return self.graveyard.count_cards('Instant') + self.graveyard.count_cards('Sorcery') >= 2
+    
+    def has_delirium(self):
+        # If there are four or more card types among cards in your graveyard, you have delirium
+        card_types = []
+        for card in self.graveyard:
+            if card.cardtype not in card_types:
+                card_types.append(card.cardtype)
+        return len(card_types) >= 4
+
+    def trigger_landfall(self, landcount=1):
+        # If there are cards on the table that trigger landfall, then trigger them.
+        for card in self.table:
+            # If the card has a landfall ability, then trigger it.
+            if hasattr(card, 'do_landfall'):
+                for i in range(landcount):
+                    card.do_landfall(self)
 
     def start_game(self) -> 'Player':
         # If it's the first turn, shuffle up and draw 7 cards
@@ -370,37 +439,52 @@ class Player:
                 self.can_cast_wurm_now = False
 
             # No-brainer decisions:
+            #  * If we have a Lotus Cobra we can play, then play it before we play any lands
             #  * If we have a land in our hand, play it
             #  * If we can cast Land Grant for free, then do so
             #  * If we can attack with a creature, then do so
             #  Otherwise, loop through all other cards in hand and activations (if any) and evaluate them.
 
-            # Land drops take priority, always do those first.
+            # Landfall triggers take priority, so we want to play things with landfall triggers (like Lotus Cobra and Spelunking) first
+            # This is not a perfect system (I.E., what if we untap with 1 land and have an Elvish Spirit Guide + Forest + Lotus in hand)
+            #  but it's a good enough approximation for now.
+            # TODO: Fix our system of Elvish Spirit Guide mana by adding it to a persistent mana pool that is always spent LAST and carried from turn to turn.
+
+            # Instant mana sources like Elvish Spirit Guide, Simian Spirit Guide, and Lotus Petal should be played first.
+            #  This is because they can be used to pay for other cards that we play this turn.
+            if self.can_alt_play('Elvish Spirit Guide'):
+                copy = self.copy()
+                copy.alt_play('Elvish Spirit Guide')
+                next_states.append(copy)
+            elif self.can_alt_play('Simian Spirit Guide'):
+                copy = self.copy()
+                copy.alt_play('Simian Spirit Guide')
+                next_states.append(copy)
+            # Next, cards with landfall triggers should be played next.
+            elif self.can_play('Lotus Cobra'):
+                copy = self.copy()
+                copy.play('Lotus Cobra')
+                next_states.append(copy)
+            # Land drops take next priority -- always do those first UNLESS we have a Lotus Cobra in hand that we can cast
             # If we can drop a land, and we have 1 or more lands in hand, then play them.
-            if self.land_drops > 0 and self.hand.count_cards('Forest') > 0:
+            elif self.land_drops > 0 and self.hand.count_cards('Forest') > 0:
                 copy = self.copy()
                 copy_lands = copy.hand.find('Forest', copy.land_drops)
                 for copy_land in copy_lands:
                     copy.play(copy_land)
-
                 next_states.append(copy)
             # Otherwise, if we can play Land Grant for its alternate cost, do that.
             elif self.can_alt_play('Land Grant'):
                 copy = self.copy()
                 copy.alt_play('Land Grant')
                 next_states.append(copy)
-            # Check to see if we can attack with a creature
+            # Check to see if we can attack with any creatures
              # Can we attack with Chancellor?
             elif self.can_activate('Chancellor of the Tangle'):
                 # Find the first copy of Chancellor in our new table that can be activated.
                 copy = self.copy()
-                for copy_card in copy.table:
-                    if copy_card.name == 'Chancellor of the Tangle' and copy_card.can_activate(copy):
-                        copy.activate(copy_card)
-                        next_states.append(copy)
-                        break
-                if not copy in next_states:
-                    raise Exception("ERROR: Chancellor of the Tangle should be able to attack, but can't.")
+                copy.activate('Chancellor of the Tangle')
+                next_states.append(copy)
              # Can we attack with Panglacial Wurm?
             elif self.panglacial_in_deck and self.can_activate('Panglacial Wurm'):
                 copy = self.copy()
@@ -529,9 +613,10 @@ class Player:
         return f"{self.current_turn})  LID: {self.deck.count_cards('Forest')}  H: {len(self.hand)}  Mana: {self.mana_pool}/{self.lands} ({self.colorless_mana_pool}/{self.colorless_lands}) [{self.hand.count_cards('Forest')}]  OLife: {self.opponent_lifetotal} '{self.log[-1]}'"
 
     # Methods to support testing
-    def debug_force_get_card_in_hand(self, card_name) -> 'Card':
+    def debug_force_get_card_in_hand(self, card_name, quant=1) -> 'Card':
         # Ensure that the player has the given card in their hand. If they don't, then retrieve on from the deck.
-        if not self.hand.count_cards(card_name) > 0:
+        while self.hand.count_cards(card_name) < quant:
+            assert self.deck.count_cards(card_name) > 0, f"ERROR: Cannot find required {quant} {card_name} in deck"
             card = self.deck.find_and_remove(card_name)[0]
             self.hand.append(card)
         return self.hand.find(card_name)[0]
@@ -619,6 +704,7 @@ class Forest (Card):
         controller.mana_pool += 1 # Assume that every land is immediately tapped for mana when it's played.
         controller.land_drops -= 1
         super().play(controller)
+        controller.trigger_landfall()
 
 # Lay of the Land is a card that costs 1 and has an ability that searches the deck for a land and puts it into the player's hand
 class LayOfTheLand (Card):
@@ -671,7 +757,45 @@ class CaravanVigil (Card):
         # The land comes into play untapped
         controller.mana_pool += len(cards)
         super().alt_play(controller)
+        controller.trigger_landfall(len(cards))
 
+# Traverse the Ulvenwald is a card that costs 1 and has an ability that says: Search your library for a basic land card, reveal it, put it into your hand, then shuffle your library. Delirium - If there are four or more card types among cards in your graveyard, instead search your library for a creature or land card, reveal it, put it into your hand, then shuffle your library.
+#  We will implement the delirium mode as an alternate play, so that we can more easily track its effect on the game.
+# NOTE: Currently I don't think there is much (any) self-mill, so probably unlikely to get Delirium. Don't bother with this right now.
+"""
+class TraverseTheUlvenwald (Card):
+    name = 'Traverse the Ulvenwald'
+    cost:int = 1
+    colorless_cost:int = 0
+    alt_cost:int = 1
+    colorless_alt_cost:int = 0
+    cardtype = 'Sorcery'
+    prefer_alt:bool = True
+
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
+    
+    def play(self, controller: Player):
+        cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
+        controller.hand.extend(cards)
+        super().play(controller)
+
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and controller.has_delirium()
+    
+    def alt_play(self, controller: Player):
+        card_priorities = ['Street Wraith', 
+        # TODO: Which land or creature do we want to find?
+        # Maybe Street Wraith so that we can turn this into a cycler...?
+        # Maybe our highest CMC creature so that we can cast it eventually?
+        # Maybe the creature with the highest CMC that's <= our current mana pool?
+        cards = controller.deck.find_and_remove('Forest', 1)
+        controller.check_panglacial()
+        controller.hand.extend(cards)
+        super().alt_play(controller)
+"""
+        
 # Sakura-Tribe Elder is a creature that costs 2 and has an ability that says: Sacrifice Sakura-Tribe Elder: Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.
 class SakuraTribeElder (Card):
     name = 'Sakura-Tribe Elder'
@@ -702,6 +826,8 @@ class SakuraTribeElder (Card):
         controller.graveyard.append(self)
         # Mark that a creature died this turn
         controller.creature_died_this_turn = True
+        # Trigger landfall
+        controller.trigger_landfall(len(cards))
 
 # Arboreal Grazer is a creature that costs 1 that says "When Arboreal Grazer enters the battlefield, you may put a land card from your hand onto the battlefield tapped."
 class ArborealGrazer (Card):
@@ -714,9 +840,11 @@ class ArborealGrazer (Card):
     def play(self, controller: Player):
         super().play(controller)
         # Put a land into play tapped
+        # NOTE: Cannot be used for MDFCs
         cards = controller.hand.find_and_remove('Forest', 1)
         controller.table.extend(cards)
         controller.lands += len(cards)
+        controller.trigger_landfall(len(cards))
 
     # Only let us play this card if we have more forests in hand than land drops
     def can_play(self, controller: Player) -> bool:
@@ -752,6 +880,7 @@ class KrosanWayfarer (Card):
         # Immediately sacrifice this
         controller.table.remove(self)
         controller.graveyard.append(self)
+        controller.trigger_landfall(len(cards))
 
 # Skyshroud Ranger is a creature that costs 1 that says "T: You may put a land card from your hand onto the battlefield. Activate only as a sorcery."
 # Sakura-Tribe Scout is a near-identical card.
@@ -780,9 +909,11 @@ class SkyshroudRanger (Card):
 
     def activate(self, controller: Player):
         # Put a land into play untapped
+        # NOTE: Cannot be used for MDFCs
         cards = controller.hand.find_and_remove('Forest', 1)
         controller.table.extend(cards)
         controller.lands += len(cards)
+        controller.trigger_landfall(len(cards))
         controller.mana_pool += len(cards)
 
         self.is_tapped = True
@@ -970,9 +1101,10 @@ class RampantGrowth(Card):
         cards = controller.deck.find_and_remove('Forest', 1)
         controller.check_panglacial()
         # Add a tapped forest
-        controller.lands += len(cards)
         controller.table.extend(cards)
+        controller.lands += len(cards)
         super().play(controller)
+        controller.trigger_landfall(len(cards))
 
 # Nissa's Pilgrimage is a card with the ability: Search your library for up to two basic Forest cards, reveal those cards, and put one onto the battlefield tapped and the rest into your hand. Then shuffle your library.  If there are two or more instant and/or sorcery cards in your graveyard, search your library for up to three basic Forest cards instead of two.
 class NissasPilgrimage(Card):
@@ -997,6 +1129,7 @@ class NissasPilgrimage(Card):
         if len(cards) > 0:
             card = cards.pop()
             controller.table.append(card)
+            controller.trigger_landfall()
             controller.lands += 1
 
         # Add the rest to the hand
@@ -1014,6 +1147,7 @@ class NissasPilgrimage(Card):
         if len(cards) > 0:
             card = cards.pop()
             controller.table.append(card)
+            controller.trigger_landfall()
             controller.lands += 1
 
         # Add the rest to the hand
@@ -1155,9 +1289,10 @@ class SearchForTomorrow(Card):
         cards = controller.deck.find_and_remove('Forest', 1)
         controller.check_panglacial()
         controller.table.extend(cards)
-        controller.lands += 1
+        controller.lands += len(cards)
         controller.mana_pool += 1 # The land comes into play untapped, so immediately add it to the mana pool.
         super().play(controller)
+        controller.trigger_landfall(len(cards))
 
     def can_alt_play(self, controller: Player) -> bool:
         return super().can_alt_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(0))
@@ -1180,24 +1315,54 @@ class SearchForTomorrow(Card):
 class RecrossThePaths(Card):
     name = 'Recross the Paths'
     cost:int = 3
-    colorless_cost:int = 3 # Colorless portion of the cost
+    colorless_cost:int = 2 # Colorless portion of the cost
     cardtype = 'Sorcery'
+    alt_cost:int = 3
+    colorless_alt_cost:int = 2 # Colorless portion of the alternate cost
 
     def __init__(self):
         pass
+
+    # Only play if there ARE lands in the deck
+    def can_play(self, controller: Player) -> bool:
+        return super().can_play(controller) and controller.deck.count_cards('Forest') > 0
 
     def play(self, controller: Player):
         # Reveal cards from the top of the library until a land is found
         cards, land = controller.deck.reveal_cards_until('Forest')
         # If a land was found this way, then put it onto the battlefield untapped
-        if land is not None:
-            controller.table.append(land)
-            controller.lands += 1
-            controller.mana_pool += 1
-            controller.debug_log(f'  Recross the Paths: Found a land')
-            cards.remove(land)
-        else:
-            controller.debug_log(f'  Recross the Paths: No land found. Deck stacked')
+        assert land is not None, f"Recross the Paths should always find a land. Revealed {cards} and found {land} instead."
+        controller.table.append(land)
+        controller.lands += 1
+        controller.mana_pool += 1
+        controller.debug_log(f'  Recross the Paths: Found a land')
+        cards.remove(land)
+        # Put the rest of the cards back on the bottom of the library
+        # Sort the cards so that any Goblin Charbelchers are at the top, and any other cards at the bottom in an arbitrary order.
+        remaining_cards = []
+        for card in cards:
+            if card.name == 'Goblin Charbelcher':
+                controller.deck.put_on_bottom(card)
+            else:
+                remaining_cards.append(card)
+        controller.deck.put_on_bottom(remaining_cards)
+
+        # TODO: Clash with an opponent. If you win, return Recross the Paths to its owner's hand.
+        # Pretend that we always win the clash.
+        # NOTE Don't need to re-append this to our hand, since it's already in here, and we haven't called super.play() to auto-add it to the graveyard
+        # controller.hand.append(self)
+        # TODO: Make this a random chance?
+
+    # Only alt_play if there are NO lands in the deck
+    def can_alt_play(self, controller: Player) -> bool:
+        return super().can_alt_play(controller) and controller.deck.count_cards('Forest') == 0
+
+    def alt_play(self, controller: Player):
+        # Reveal cards from the top of the library until a land is found
+        cards, land = controller.deck.reveal_cards_until('Forest')
+        # If a land was found this way, then put it onto the battlefield untapped
+        assert land is None, f"Recross the Paths alternate play should NEVER find a land, and only stack the deck, found {land} after {cards} instead."
+        controller.debug_log(f'  Recross the Paths: No land found. Deck stacked')
         # Put the rest of the cards back on the bottom of the library
         # Sort the cards so that any Goblin Charbelchers are at the top, and any other cards at the bottom in an arbitrary order.
         remaining_cards = []
@@ -1378,12 +1543,11 @@ class ElvishSpiritGuide(Card):
         return False
     
     def can_alt_play(self, controller: Player) -> bool:
-        # TODO: Only consider playing this card if we have other cards in our hand that might need the mana
         return True
 
     def alt_play(self, controller: Player):
-        # Instead of activating this, just add to our mana pool directly.
-        controller.mana_pool += 1
+        # Instead of activating this, add it to our persistent mana pool
+        controller.persistent_mana_pool += 1
         # Exile it instead of adding it to the table
         # super().alt_play(controller)
         controller.exile.append(self)
@@ -1530,7 +1694,7 @@ class GenerousEnt(Card):
 
     def activate(self, controller: Player):
         self.is_tapped = True
-        controller.opponent_lifetotal -= 5
+        controller.opponent_lifetotal -= self.power
         if controller.opponent_lifetotal <= 0:
             controller.debug_log(f'  Generous Ent attacked for 5 and won the game')
         else:
@@ -1702,10 +1866,6 @@ class TangledFlorahedron(Card):
     power:int = 1
     toughness:int = 1
 
-    def __init__(self):
-        self.is_tapped = True
-        pass
-
     def play(self, controller: Player):
         # Instead of activating to add mana to our mana pool, just treat it as a new land so we don't have as many branching permutations.
         controller.lands += 1
@@ -1737,9 +1897,8 @@ class DiscipleOfFreyalise(Card):
     toughness:int = 3
     deck_max_quant:int = 0 # Turn off this card for now because it doesn't release until Modern Masters 3
 
-    def __init__(self):
-        self.is_tapped = True
-        pass
+    def do_upkeep(self, controller: Player):
+        self.is_tapped = False
 
     def play(self, controller: Player):
         # Find the creature with the highest power and sacrifice it
@@ -1758,6 +1917,17 @@ class DiscipleOfFreyalise(Card):
         
         super().play(controller)
 
+    def can_activate(self, controller: Player) -> bool:
+        return super().can_activate(controller) and not self.is_tapped
+    
+    def activate(self, controller: Player):
+        self.is_tapped = True
+        controller.opponent_lifetotal -= 3
+        if controller.opponent_lifetotal <= 0:
+            controller.debug_log(f'  Disciple of Freyalise attacked for 3 and won the game')
+        else:
+            controller.debug_log(f'  Disciple of Freyalise attacked for 3')
+
     # Alt play is playing it as a land on its backside
     def can_alt_play(self, controller: Player) -> bool:
         return controller.land_drops > 0
@@ -1766,12 +1936,11 @@ class DiscipleOfFreyalise(Card):
         controller.lands += 1
         controller.land_drops -= 1
         
-        # If we have the life available, then we can play this untapped
+        # If we have the life available, then we can play this untapped. Otherwise, it comes in tapped.
         if controller.life_total > 3:
             controller.life_total -= 3
             controller.mana_pool += 1
 
-        # This comes in tapped, so we can't immediately add it to our mana_pool
         # Change the name and cardtype to the backside
         self.cardtype = 'Land'
         super().alt_play(controller)
@@ -1796,6 +1965,7 @@ class JourneyOfDiscovery(Card):
         return super().can_play(controller) and (controller.deck.count_cards('Forest') > 0 or controller.panglacial_potential(self.cost))
 
     # Check to see if the number of lands we have in our hand is greater than the number of land drops we have remaining
+    # TODO: Also check to see if we have MDFC lands in hand that we can play instead...?
     def can_alt_play(self, controller: Player) -> bool:
         return super().can_alt_play(controller) and controller.hand.count_cards('Forest') > controller.land_drops
 
@@ -1809,9 +1979,69 @@ class JourneyOfDiscovery(Card):
         controller.land_drops += 2
         super().alt_play(controller)
 
-    # TODO: See if we can implement the entwine cost as an activation cost -- need to modify things so that we can activate this card from the hand
+    # TODO: See if we can implement the entwine cost as an activation cost -- need to modify things so that we can activate this card from the hand?
     #def can_activate(self, controller: Player) -> bool:
     #    return super().can_activate(controller) and controller.mana_pool >= self.activation_cost
 
+# Street Wraith is a 3/4 creature that costs 3BB, but the interesting bit is that it says: Cycling - Pay 2 life. (Pay 2 life, Discard this card: Draw a card.)
+#  We will never cast it, but will always cycle it for 2 life.
+class StreetWraith(Card):
+    name = 'Street Wraith'
+    cost:int = MAXINT # Assume we can never cast this card. Manamorphose would technically let us cast it, but let's not worry about that right now.
+    colorless_cost:int = 3 # Colorless portion of the cost
+    alt_cost:int = 0
+    power:int = 3
+    toughness:int = 4
+    cardtype = 'Creature'
+
+    def __init__(self):
+        pass
+
+    def can_play(self, controller: Player) -> bool:
+        return False
+
+    def can_alt_play(self, controller: Player) -> bool:
+        return controller.life_total > 2
+
+    def alt_play(self, controller: Player):
+        controller.life_total -= 2
+        controller.draw()
+        controller.graveyard.append(self)
+
 # TODO: Consider Lotus Cobra as a way to ramp mana when we're adding lots of lands to the battlefield
+# Lotus Cobra is a 2/1 creature that costs 1G and says: Landfall — Whenever a land enters the battlefield under your control, add one mana of any color.
+class LotusCobra(Card):
+    name = 'Lotus Cobra'
+    cost:int = 2
+    colorless_cost:int = 1 # Colorless portion of the cost
+    cardtype = 'Creature'
+    power:int = 2
+    toughness:int = 1
+
+    def __init__(self) -> None:
+        self.is_tapped = True
+        super().__init__()
+
+    def do_upkeep(self, controller: Player):
+        self.is_tapped = False
+
+    def play(self, controller: Player):
+        self.is_tapped = True
+        super().play(controller)
+
+    def can_activate(self, controller: Player) -> bool:
+        return (not self.is_tapped) and (self in controller.table)
+    
+    def activate(self, controller: Player):
+        self.is_tapped = True
+        controller.opponent_lifetotal -= self.power
+        if controller.opponent_lifetotal <= 0:
+            controller.debug_log(f'  Lotus Cobra attacked for 2 and won the game')
+        else:
+            controller.debug_log(f'  Lotus Cobra attacked for 2')
+
+    def do_landfall(self, controller: Player):
+        # Add a green on every landfall
+        controller.mana_pool += 1
+        controller.debug_log(f'  Lotus Cobra: Landfall triggered, adding 1 green mana')
 
