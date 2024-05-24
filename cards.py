@@ -36,7 +36,9 @@ class Cards(list):
             print ("Warning: Card not found: " + cardname)
         else:
             for i in range(int(quantity)):
-                self.append(card_class())
+                next_card = card_class()
+                next_card.uid = len(self)
+                self.append(next_card)
 
     def shuffle(self):
         # Shuffle the deck with a fixed seed
@@ -128,18 +130,34 @@ class Cards(list):
         else:
             self.insert(0, card)
 
-    def get_card(self, card) -> 'Card':
-        if isinstance(card, int):
-            return self[card]
-        if isinstance(card, str):
-            for c in self:
-                if c.name == card:
-                    return c
-            #print(f'Unable to find card "{card}"')
-            return None
-        else:
-            return card
+    def get_card(self, card_ref, player:'Player'=None, can_play=False, can_alt_play=False, can_activate=False) -> 'Card':
+        if (can_play or can_alt_play or can_activate) and not isinstance(player, Player):
+            raise Exception("Player object must be passed to get_card if play/activate filter is set.")
+        
+        if isinstance(card_ref, Card):
+            card_ref = card_ref.uid
 
+        if isinstance(card_ref, int):
+            # Return the first instance where the card uid matches the card_ref
+            for c in self:
+                if (c.uid == card_ref
+                    and (not can_play or c.can_play(player))
+                    and (not can_alt_play or c.can_alt_play(player))
+                    and (not can_activate or c.can_activate(player))):
+                    return c
+            #print(f'Unable to find card "{card_ref}"')
+            return None
+        if isinstance(card_ref, str):
+            for c in self:
+                if (c.name == card_ref 
+                    and (not can_play or c.can_play(player))
+                    and (not can_alt_play or c.can_alt_play(player))
+                    and (not can_activate or c.can_activate(player))):
+                    return c
+            #print(f'Unable to find card "{card_ref}"')
+            return None
+
+        return None
 
 class Player:
     land_drops:int = 0
@@ -211,55 +229,72 @@ class Player:
         colored_cost = total_cost - colorless_cost
 
         colored_mana_available = self.mana_pool + self.persistent_mana_pool
+
         colorless_mana_available = self.colorless_mana_pool + self.persistent_colorless_mana_pool
 
-        return (colored_cost <= colored_mana_available
-            and total_cost <= colored_mana_available + colorless_mana_available)
+        return ((colored_cost <= colored_mana_available)
+            and (total_cost <= colored_mana_available + colorless_mana_available))
 
     def adjust_mana_pool(self, total_cost, colorless_cost=0):
+        #debuglog = f"\n Adjusting mana pool for {total_cost} ({colorless_cost}) for card {debug_card_ref}"
         starting_total_mana = self.mana_pool + self.colorless_mana_pool + self.persistent_mana_pool + self.persistent_colorless_mana_pool
+        #debuglog += f'\n  {starting_total_mana} starting mana: {self.mana_pool} ({self.colorless_mana_pool}) [{self.persistent_mana_pool} ({self.persistent_colorless_mana_pool})]'
         remaining_colored_cost = total_cost - colorless_cost
         remaining_colorless_cost = colorless_cost
 
-        ### Stage 1: Colorless costs
-        ## 1) Spend temporary colorless mana on our colorless costs first
-        ## 2) Spend spare temporary colored mana on our remaining colorless costs next
-        ## 3) Spend persistent colorless mana on our remaining colorless costs last
-
-        ### Stage 2: Colored costs
+        ### Stage 1: Colored costs
         ## 1) Spend temporary colored mana on our colored costs first
         ## 2) Spend persistent colored mana on our remaining colored costs last
 
-        ### Stage 1: Colorless costs
-        ## Step 1.1) Spend temporary colorless mana on our colorless costs first
-        colorless_usage = min(self.colorless_mana_pool, colorless_cost)
-        self.colorless_mana_pool -= colorless_usage
-        remaining_colorless_cost -= colorless_usage
+        ### Stage 2: Colorless costs
+        ## 1) Spend temporary colorless mana on our colorless costs first
+        ## 2) Spend temporary colored mana on our remaining colorless costs next
+        ## 3) Spend persistent colorless mana on our remaining colorless costs next
+        ## 4) Spend persistent colored mana on our remaining colorless costs last
 
-        # Calculate how much extra colored mana do we have to spend
-        spare_colored_mana = self.mana_pool - remaining_colored_cost
-
-        ## Step 2.2) Spend spare temporary colored mana on our remaining colorless costs next
-        if spare_colored_mana >= 0:
-            colorless_usage = min(spare_colored_mana, remaining_colorless_cost)
-            self.mana_pool -= colorless_usage
-            remaining_colorless_cost -= colorless_usage
-
-        ## Step 2.3) Spend persistent colorless mana on our remaining colorless costs last
-        colorless_usage = min(self.persistent_colorless_mana_pool, remaining_colorless_cost)
-        self.persistent_colorless_mana_pool -= colorless_usage
-        remaining_colorless_cost -= colorless_usage
-
-        ### Stage 2: Colored costs
+        ### Stage 1: Colored costs
         ## Step 1.1) Spend temporary colored mana on our colored costs first
         colored_usage = min(self.mana_pool, remaining_colored_cost)
         self.mana_pool -= colored_usage
         remaining_colored_cost -= colored_usage
 
-        ## Step 2.2) Spend persistent colored mana on our remaining colored costs last
+        #debuglog += f'\n Spent {colored_usage} colored mana on colored costs, {remaining_colored_cost} remaining'
+
+        ## Step 1.2) Spend persistent colored mana on our remaining colored costs last
         colored_usage = min(self.persistent_mana_pool, remaining_colored_cost)
         self.persistent_mana_pool -= colored_usage
         remaining_colored_cost -= colored_usage
+
+        #debuglog += f'\n Spent {colored_usage} persistent colored mana on colored costs, {remaining_colored_cost} remaining'
+
+        ### Stage 2: Colorless costs
+        ## Step 2.1) Spend temporary colorless mana on our colorless costs first
+        colorless_usage = min(self.colorless_mana_pool, remaining_colorless_cost)
+        self.colorless_mana_pool -= colorless_usage
+        remaining_colorless_cost -= colorless_usage
+
+        #debuglog += f'\n Spent {colorless_usage} colorless mana on colorless costs, {remaining_colorless_cost} remaining'
+
+        ## Step 2.2) Spend temporary colored mana on our remaining colorless costs next
+        colored_usage = min(self.mana_pool, remaining_colorless_cost)
+        self.mana_pool -= colored_usage
+        remaining_colorless_cost -= colored_usage
+
+        #debuglog += f'\n Spent {colored_usage} colored mana on colorless costs, {remaining_colorless_cost} remaining'
+
+        ## Step 2.3) Spend persistent colorless mana on our remaining colorless costs next
+        colorless_usage = min(self.persistent_colorless_mana_pool, remaining_colorless_cost)
+        self.persistent_colorless_mana_pool -= colorless_usage
+        remaining_colorless_cost -= colorless_usage
+
+        #debuglog += f'\n Spent {colorless_usage} persistent colorless mana on colorless costs, {remaining_colorless_cost} remaining'
+
+        ## Step 2.4) Spend persistent colored mana on our remaining colorless costs last
+        colored_usage = min(self.persistent_mana_pool, remaining_colorless_cost)
+        self.persistent_mana_pool -= colored_usage
+        remaining_colorless_cost -= colored_usage
+
+        #debuglog += f'\n Spent {colored_usage} persistent colored mana on colorless costs, {remaining_colorless_cost} remaining'
 
         # Check that we haven't overspent
         assert self.mana_pool >= 0
@@ -269,74 +304,54 @@ class Player:
 
         # Ensure that we spent the proper amount
         ending_total_mana = self.mana_pool + self.colorless_mana_pool + self.persistent_mana_pool + self.persistent_colorless_mana_pool
-        assert starting_total_mana - total_cost == ending_total_mana
+        #debuglog += f'\n  {ending_total_mana} ending mana: {self.mana_pool} ({self.colorless_mana_pool}) [{self.persistent_mana_pool} ({self.persistent_colorless_mana_pool})]'
+
+        assert starting_total_mana - total_cost == ending_total_mana, f"ERROR: Spent {starting_total_mana - ending_total_mana} mana, but should have spent {total_cost} ({colorless_cost})."
 
     def can_play(self, card) -> bool:
-        card = self.hand.get_card(card)
-        if card is None:
-            return False
+        card = self.hand.get_card(card, player=self, can_play=True)
+        return card is not None
 
-        if card in self.hand:
-            return card.can_play(self)
-        return False
+    def play(self, card_ref):
+        card = self.hand.get_card(card_ref, player=self, can_play=True)
 
-    def play(self, card):
-        card = self.hand.get_card(card)
+        if not card:
+            raise Exception(f'ERROR: Cannot retrieve playable card {card_ref} from hand')
 
-        if card in self.hand:
-            if not card.can_play(self):
-                print(f' ERROR: Cannot play {card}. Mana cost is {card.cost} and mana pool is {self.mana_pool} ({self.colorless_mana_pool})')
-                raise Exception(f' ERROR: Cannot play {card}. Mana cost is {card.cost} and mana pool is {self.mana_pool} ({self.colorless_mana_pool})')
-            else:
-                self.debug_log(f" Play: {card}")
-                self.hand.remove(card)
-                self.adjust_mana_pool(card.cost, card.colorless_cost)
-                card.play(self)
+        self.debug_log(f" Play: {card} ({card_ref})")
+        self.hand.remove(card)
+        self.adjust_mana_pool(card.cost, card.colorless_cost)
 
-    def can_alt_play(self, card) -> bool:
-        card = self.hand.get_card(card)
-        if card is None:
-            return False
+        card.play(self)
 
-        if card in self.hand:
-            return card.can_alt_play(self)
-        return False
+    def can_alt_play(self, card_ref) -> bool:
+        card = self.hand.get_card(card_ref, player=self, can_alt_play=True)
+        return card is not None
 
-    def alt_play(self, card):
-        card = self.hand.get_card(card)
+    def alt_play(self, card_ref):
+        card = self.hand.get_card(card_ref, player=self, can_alt_play=True)
 
-        if card in self.hand:
-            if not card.can_alt_play(self):
-                print(f' ERROR: Cannot alt play {card}')
-                raise Exception(f' ERROR: Cannot alt play {card}')
-            else:
-                self.debug_log(f" Alt play: {card}")
-                self.hand.remove(card)
-                self.adjust_mana_pool(card.alt_cost, card.colorless_alt_cost)
-                card.alt_play(self)
+        if not card:
+            raise Exception(f' ERROR: Cannot alt play card {card_ref} from hand')
+            
+        self.debug_log(f" Alt play: {card}")
+        self.hand.remove(card)
+        self.adjust_mana_pool(card.alt_cost, card.colorless_alt_cost)
+        card.alt_play(self)
 
-    def can_activate(self, card) -> bool:
-        if isinstance(card, Card):
-            return card in self.table and card.can_activate(self)
-        else:
-            for tablecard in self.table:
-                if tablecard.name == card and tablecard.can_activate(self):
-                    return True
+    def can_activate(self, card_ref) -> bool:
+        card = self.table.get_card(card_ref, player=self, can_activate=True)
+        return card is not None
+    
+    def activate(self, card_ref):
+        card = self.table.get_card(card_ref, player=self, can_activate=True)
 
-        return False
-
-    def activate(self, card):
-        card = self.table.get_card(card)
-
-        if card in self.table:
-            if not card.can_activate(self):
-                # Throw exception
-                print(f' ERROR: Cannot activate {card}')
-                raise Exception(f' ERROR: Cannot activate {card}')
-            else:
-                self.debug_log(f" Activate: {card}")
-                self.adjust_mana_pool(card.activation_cost, card.colorless_activation_cost)
-                card.activate(self)
+        if not card:
+            raise Exception(f' ERROR: Cannot activate card {card_ref} from table')
+        
+        self.debug_log(f" Activate: {card}")
+        self.adjust_mana_pool(card.activation_cost, card.colorless_activation_cost)
+        card.activate(self)
 
     def panglacial_potential(self, additional_cost) -> bool:
         if not self.panglacial_in_deck:
@@ -469,9 +484,8 @@ class Player:
             # If we can drop a land, and we have 1 or more lands in hand, then play them.
             elif self.land_drops > 0 and self.hand.count_cards('Forest') > 0:
                 copy = self.copy()
-                copy_lands = copy.hand.find('Forest', copy.land_drops)
-                for copy_land in copy_lands:
-                    copy.play(copy_land)
+                for cnt in range(min(self.hand.count_cards('Forest'), self.land_drops)):
+                    copy.play('Forest')
                 next_states.append(copy)
             # Otherwise, if we can play Land Grant for its alternate cost, do that.
             elif self.can_alt_play('Land Grant'):
@@ -505,20 +519,20 @@ class Player:
                         unique_hand_cards.append(card)
 
                 # For every card, if it is flagged to consider not playing it, then create a branch where we don't play it.
-                for card_idx, card in enumerate(self.hand):
+                for card in self.hand:
                     # TODO: Fix this
                     if False and card.consider_not_playing and not card.skip_playing_this_turn:
                         copy = self.copy()
-                        copy_card = copy.hand[card_idx]
+                        copy_card = copy.hand.get_card(card.uid)
                         copy_card.skip_playing_this_turn = True
                         next_states.append(copy)
 
                 # For every unique card, if we can play that card, then play it.  Don't branch more than once for each card name.
                 for card in unique_hand_cards:
-                    can_altplay = self.can_alt_play(card)
+                    can_altplay = self.can_alt_play(card.name)
 
                     # Only play it for regular if the card doesn't prefer to be alt played
-                    if self.can_play(card) and not (can_altplay and card.prefer_alt):
+                    if self.can_play(card.name) and not (can_altplay and card.prefer_alt):
                         copy = self.copy()
                         copy.play(card.name)
                         next_states.append(copy)
@@ -530,10 +544,10 @@ class Player:
                 # However, for cards already on the field, we can activate multiples of the same card
 
                 # Attempt to activate every card on the table
-                for card_idx, card in enumerate(self.table):
+                for card in self.table:
                     if self.can_activate(card):
                         copy = self.copy()
-                        copy_card = copy.table[card_idx]
+                        copy_card = copy.table.get_card(card.uid)
                         copy.activate(copy_card)
                         next_states.append(copy)
 
@@ -594,15 +608,17 @@ class Player:
         s += f" Hand: {len(self.hand)} cards\n"
         # Display the hand sorted alphabetically
         for card in sorted(self.hand, key=lambda x: x.name):
-            s += f"  {card}\n"
+            s += f"  {card}[{card.uid}]\n"
         s += f" Table: {len(self.table)} cards\n"
         for card in sorted(self.table, key=lambda x: x.name):
-            s += f"  {card}\n"
+            s += f"  {card}[{card.uid}]\n"
         s += f" Graveyard: {len(self.graveyard)} cards\n"
         for card in sorted(self.graveyard, key=lambda x: x.name):
-            s += f"  {card}\n"
+            s += f"  {card}[{card.uid}]\n"
         s += f" Library: {len(self.deck)} cards\n"
         s += f" Exile: {len(self.exile)} cards\n"
+        for card in sorted(self.exile, key=lambda x: x.name):
+            s += f"  {card}[{card.uid}]\n"
 
         return s
 
@@ -641,6 +657,7 @@ class Card:
     skip_playing_this_turn:bool = False # Flag to mark when this card should be skipped and saved for a future turn
     power:int = None
     toughness:int = None
+    uid:int = -1
 
     def __str__(self):
         return self.name
