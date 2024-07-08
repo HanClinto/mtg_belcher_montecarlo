@@ -28,9 +28,13 @@ For starters, here's a graph showing how our average win turn declines over time
 
 Nice! In 10 hours of learning, we speed up our average win by nearly a full turn!
 
-Note: I'm still trying to figure out the best way to present the rest of the data so that it's understandable -- if I really get up the gumption I'd like to record a video about it sometime.
+Note: I'm still experimenting to find the best way to present the rest of the data so that it's understandable. Feedback is appreciated!
 
-That said, let's see what changes were made at each step in order to do that. 
+Here's a [Flourish animation](https://public.flourish.studio/visualisation/18088180/) of the first 128 epochs:
+
+https://github.com/HanClinto/mtg_belcher_montecarlo/assets/796749/e45c2db3-63fd-4616-8a3c-88fc83a0fe92
+
+Let's break it down and see what changes were made at each step in order to do that. 
 
 This is a graph of the entire 60-card deck and how the cards change in it over time.
 
